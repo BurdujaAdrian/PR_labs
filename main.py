@@ -54,7 +54,27 @@ def respond_dir(args: list[str]) -> str:
 
 def respond_file(args:list[str])->tuple[str,bytes]:
 
-    return "HTTP/1.1 200 Ok \r\nContent-Type: text/plain\r\nContent-Length: 4\r\n\r\ntodo",b""
+    path = "./"+args[0]
+    for a in args[1:]:
+        path += "/"+a
+
+    try:
+        with open(path, 'rb') as file_data:
+            data = file_data.read()
+    except Exception as e:
+        excp = f"{e}|{e.__class__}"
+        response = "HTTP/1.1 500 Internal Server Error\r\n" + \
+                   "Content-Type: text/plain\r\n" + \
+                  f"Content-Length: {len(excp)}\r\n" + \
+                   "\r\n" + \
+                  f"{excp}"
+        return response, b""
+
+    response = "HTTP/1.1 200 Ok \r\n"+\
+               "Content-Type: \r\n"+\
+              f"Content-Length: {len(data)}\r\n\r\n"
+
+    return response,data
 
 
 
