@@ -1,5 +1,6 @@
 import socket
 import os
+from typing_extensions import is_protocol
 
 
 local_files = os.listdir('.')
@@ -7,11 +8,54 @@ print(f'files:\n{local_files}')
 
 server = socket.socket(socket.AF_INET,socket.SOCK_STREAM)
 
-server.bind(('0.0.0.0',8080))
+server.bind(('localhost',8080))
 
 server.listen(1)
 
-http_ok = "HTTP/1.1 200 OK "
+
+def respond_dir(args: list[str]) -> str:
+    path = "./"
+    for a in args:
+        path += a + "/"
+
+    files = []
+    try:
+        files = os.listdir(path)
+    except Exception as e:
+        excp = f"{e}"
+        response = "HTTP/1.1 500 Internal Server Error\r\n" + \
+                   "Content-Type: text/plain\r\n" + \
+                  f"Content-Length: {len(excp)}\r\n" + \
+                   "\r\n" + \
+                  f"{excp}"
+        return response
+    
+    html_content  =  "<html><head><title>Lab1</title></head><body>"
+    html_content += f"<h1>Directory Listing for {path}</h1><ul>"
+    
+    html_content += "<hr>"
+    for file in files:
+        if os.path.isdir(os.path.join(path, file)):
+            html_content += f'<li><a href="{file}/">{file}/</a></li>'
+        else:
+            html_content += f'<li><a href="{file}">{file}</a></li>'
+    
+    html_content += "<hr>"
+    html_content += "</ul></body></html>"
+    
+    response = "HTTP/1.1 200 OK\r\n" + \
+               "Content-Type: text/html\r\n" + \
+              f"Content-Length: {len(html_content)}\r\n" + \
+               "\r\n" + \
+              f"{html_content}"
+
+    return response
+
+
+def respond_file(args:list[str])->tuple[str,bytes]:
+
+    return "HTTP/1.1 200 Ok \r\nContent-Type: text/plain\r\nContent-Length: 4\r\n\r\ntodo",b""
+
 
 
 
@@ -20,51 +64,27 @@ while True:
     
     data = client.recv(1024)
     lines = data.decode().split('\n')
-    print(lines[0])
-
     request = lines[0]
 
     print(f"request : {request}")
+    if request == "": #if some malformed request occured
+        client.close()
+        continue
+
     path = request.split(" ")[1]
 
-
-
-    response = ""
-    response += "HTTP/1.1 200 OK\r\n"
-
+    is_dir = path[-1] == "/"
     args = path.split("/")
-    print(args)
-    if args[1] == "echo" and len(args)==3:
-        response += "Content-Type: text/plain\r\n"
-        response += f"Content-Length: {len(args[2])}\r\n"
-        response += "\r\n"
-        response += f"{args[2]}\r\n"
-    elif len(args)==2:
-        file = args[1]
-        data = b"0"
+    args = [arg for arg in args if arg != ""]
 
-        for file_name in local_files:
-            if file_name == file:
-                print(f'file found {file_name}')
-                with open(file_name, 'rb') as file_data:
-                    data = file_data.read()
-
-        print(f'file requested: {file}')
-        if data == b"0":
-            response = "HTTP/1.1 404  Not Found\r\n"
-            response += "Content-Type: text/plain\r\n"
-            response += f"Content-Length: {len('file not found\r\n')}\r\n"
-            response += "\r\n"
-            response += "file not found\r\n"
-        else:
-            response += f"Content-Length: {len(data)}\r\n"
-            response += "\r\n"
-            client.send(response.encode() + data)
-            client.close()
-            continue
+    if is_dir:
+        response = respond_dir(args)
+        client.send(response.encode())
     else:
-        response += "\r\n"
-    print(f"response: {response}")
-    client.send(response.encode())
+        response,data = respond_file(args)
+        client.send(response.encode() + data)
+        if args[0] == "exit":
+            os._exit(0)
 
     client.close()
+    continue
