@@ -11,6 +11,8 @@ server.bind(('0.0.0.0',8080))
 
 server.listen(1)
 
+def not_found():
+    return "HTTP/1.1 404 Not Found\r\n\r\n"
 
 def respond_dir(args: list[str]) -> str:
     path = "./"
@@ -20,6 +22,8 @@ def respond_dir(args: list[str]) -> str:
     files = []
     try:
         files = os.listdir(path)
+    except FileNotFoundError:
+        return not_found()
     except Exception as e:
         excp = f"{e}"
         response = "HTTP/1.1 500 Internal Server Error\r\n" + \
@@ -57,6 +61,8 @@ def respond_file(args:list[str])->tuple[str,bytes]:
     for a in args[1:]:
         path += "/"+a
 
+    if path.split(".")[-1] != "html":
+        return not_found(),b""
     try:
         with open(path, 'rb') as file_data:
             data = file_data.read()
@@ -68,6 +74,7 @@ def respond_file(args:list[str])->tuple[str,bytes]:
                    "\r\n" + \
                   f"{excp}"
         return response, b""
+
 
     response = "HTTP/1.1 200 Ok \r\n"+\
                "Content-Type: \r\n"+\
