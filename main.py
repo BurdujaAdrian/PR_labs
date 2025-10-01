@@ -1,6 +1,5 @@
 import socket
 import os
-from typing_extensions import is_protocol
 
 
 local_files = os.listdir('.')
@@ -8,7 +7,7 @@ print(f'files:\n{local_files}')
 
 server = socket.socket(socket.AF_INET,socket.SOCK_STREAM)
 
-server.bind(('localhost',8080))
+server.bind(('0.0.0.0',8080))
 
 server.listen(1)
 
