@@ -12,7 +12,7 @@ server.bind(('0.0.0.0',8080))
 server.listen(1)
 
 def not_found():
-    return "HTTP/1.1 404 Not Found\r\n\r\n"
+    return "HTTP/1.1 404 Not Found\r\n"
 
 def respond_dir(args: list[str]) -> str:
     path = "./"
