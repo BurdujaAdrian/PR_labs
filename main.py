@@ -105,6 +105,7 @@ while True:
         continue
 
     path = request.split(" ")[1]
+    path = path.replace("%20"," ")
 
     is_dir = path[-1] == "/"
     args = path.split("/")

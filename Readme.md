@@ -28,6 +28,15 @@ request message to the server. The server, which provides resources such as HTML
 and other content or performs other functions on behalf of the client, returns a 
 response message to the client. The response contains completion status information 
 about the request and may also contain requested content in its message body.
+
+### Screenshots
+
+![File surfing](image(10).png)
+![Serving html](image(11).png)
+![Serving pdf](image(9).png)
+![Serving png](image(8).png)
+![Serving none of the aboce](image(10).png)
+
 ### Implementation:server
 
 To use a socket, the python code must define it's values and bind it:
