@@ -18,11 +18,11 @@ def get(addr:str,port:int,path:str)->tuple[bytes,bool]:
         response = b""
 
         while True:
-            print(f"Recieving packets:")
             packet = client_sock.recv(4096)
             if len(packet) == 0:
                 break
 
+            print(f"Recieving packets:{packet.decode()}")
             response += packet
 
         return response,True
@@ -52,6 +52,7 @@ if len(args) < 2:
 addr,path = args[1].split("/",1)
 print(addr,path)
 file_name = path.split("/")[-1]
+print("file name:",file_name)
 
 
 if len(args) < 3:
@@ -66,7 +67,7 @@ if not ok:
     print("not ok",data)
     os._exit(1)
 
-with open(file_name, 'wb') as file:
+with open(output, 'wb') as file:
     file.write(data)
 
 
