@@ -36,6 +36,8 @@ about the request and may also contain requested content in its message body.
 ![Serving pdf](image(9).png)
 ![Serving png](image(8).png)
 ![Serving none of the aboce](image(10).png)
+![Running the server locally](image(12).png)
+![Running the server though Docker](image(13).png)
 
 ### Implementation:server
 
