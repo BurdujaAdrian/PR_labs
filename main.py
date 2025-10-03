@@ -9,7 +9,7 @@ server = socket.socket(socket.AF_INET,socket.SOCK_STREAM)
 
 server.bind(('0.0.0.0',8080))
 
-server.listen(1)
+server.listen(5)
 
 def not_found():
     return "HTTP/1.1 404 Not Found\r\n\r\n"
