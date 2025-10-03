@@ -61,8 +61,16 @@ def respond_file(args:list[str])->tuple[str,bytes]:
     for a in args[1:]:
         path += "/"+a
 
-    if path.split(".")[-1] != "html":
+    content_type = ""
+    if path.split(".")[-1] == "html":
+        content_type = "text/html"
+    elif path.split(".")[-1] == "pdf":
+        content_type = "application/pdf"
+    elif path.split(".")[-1] == "png":
+        content_type = "image/png"
+    else:
         return not_found(),b""
+
     try:
         with open(path, 'rb') as file_data:
             data = file_data.read()
@@ -70,14 +78,13 @@ def respond_file(args:list[str])->tuple[str,bytes]:
         excp = f"{e}|{e.__class__}"
         response = "HTTP/1.1 500 Internal Server Error\r\n" + \
                    "Content-Type: text/plain\r\n" + \
-                  f"Content-Length: {len(excp)}\r\n" + \
-                   "\r\n" + \
+                  f"Content-Length: {len(excp)}\r\n\r\n" + \
                   f"{excp}"
         return response, b""
 
 
     response = "HTTP/1.1 200 Ok \r\n"+\
-               "Content-Type: text/html\r\n"+\
+              f"Content-Type: {content_type}\r\n"+\
               f"Content-Length: {len(data)}\r\n\r\n"
 
     return response,data
@@ -89,7 +96,7 @@ while True:
     client,addr = server.accept()
     
     data = client.recv(1024)
-    lines = data.decode().split('\n')
+    lines = data.decode().split('\r\n')
     request = lines[0]
 
     print(f"request : {request}")
