@@ -77,7 +77,7 @@ def respond_file(args:list[str])->tuple[str,bytes]:
 
 
     response = "HTTP/1.1 200 Ok \r\n"+\
-               "Content-Type: \r\n"+\
+               "Content-Type: text/html\r\n"+\
               f"Content-Length: {len(data)}\r\n\r\n"
 
     return response,data
