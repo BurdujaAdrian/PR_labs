@@ -1,0 +1,15 @@
+name: lab2-concurrent_server
+
+services:
+  web-server:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    # Define the full image repository path for pushing
+    image: adrianburduja/lab2-concurent_server:latest
+    container_name: concurent_server
+    ports:
+      - "8080:8080"
+    volumes:
+      - .:/lab2
+    working_dir: /lab2
