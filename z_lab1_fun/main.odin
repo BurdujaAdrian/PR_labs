@@ -6,6 +6,7 @@ import "core:fmt"
 import "core:mem"
 import "core:net"
 import "core:os"
+import fp "core:path/filepath"
 import str "core:strings"
 import "core:time"
 
@@ -14,6 +15,7 @@ buff: [4096]byte
 server_up := true
 
 main :: proc() {
+
 
 	// tcp
 	server_endpoint := net.Endpoint{net.IP4_Any, 8080}
@@ -74,7 +76,13 @@ handle_client :: proc(client: net.TCP_Socket) {
 		if is_dir {
 			fmt.println("it's a dir")
 
-			response = ls_cwd()
+			html, ok := ls_dir(fmt.tprintf(".\\%s", request))
+			if ok {
+				response = ok_response(html, "text/html")
+			} else {
+				response = html
+			}
+
 
 		} else {
 			fmt.println("its a file")
@@ -82,6 +90,7 @@ handle_client :: proc(client: net.TCP_Socket) {
 		}
 
 
+		fmt.printfln("response: {{%s}}", response)
 		_, err := net.send_tcp(client, response)
 
 		if err != nil {
@@ -98,10 +107,44 @@ handle_client :: proc(client: net.TCP_Socket) {
 	}
 }
 
-ls_cwd :: proc() -> []byte {
-	sb := str.builder_make()
+ls_dir :: proc(dir: string = ".\\") -> ([]byte, bool) {
 
-	return sb.buf[:]
+	if !os.is_dir(dir) {
+
+		return not_found_response(), false
+	}
+
+	sb := str.builder_make()
+	fmt.sbprintf(
+		&sb,
+		`
+<html><head><title>Lab1</title></head>
+<body>
+<h1> Directory Lusting for .%s</h1>
+<ul>
+<hr>`,
+		dir[2:],
+	)
+
+	files, err := fp.glob(fmt.tprintf("%s*", dir), context.temp_allocator)
+	fmt.println(files)
+
+	if err != nil {
+		return server_err_response(err), false
+	}
+
+	for file in files {
+		_, file_name := fp.split(file)
+		if os.is_dir(file) {
+			fmt.sbprintf(&sb, `<li><a href="%s\">%s\ </a></li>`, file_name, file_name)
+
+		} else {
+			fmt.sbprintf(&sb, "<li><a href=\"%s\">%s </a></li>", file_name, file_name)
+		}
+	}
+
+	fmt.sbprintf(&sb, "<ht></ul></body></html>")
+	return sb.buf[:], true
 }
 
 not_found_response :: #force_inline proc() -> []byte {
@@ -124,7 +167,7 @@ ok_response :: #force_inline proc(
 	sb := str.builder_make()
 	fmt.sbprintf(
 		&sb,
-		"HTTP/1.1 200 Ok\r\n" + "Content-Type: %s\r\n" + "Content-Length: %s\r\n\r\n",
+		"HTTP/1.1 200 Ok\r\n" + "Content-Type: %s\r\n" + "Content-Length: %v\r\n\r\n",
 		content,
 		len(data),
 	)
