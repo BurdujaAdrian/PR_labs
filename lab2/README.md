@@ -1,4 +1,4 @@
-# Lab1
+# Lab2
 
 ## Elaborated by: Burduja Adrian faf231
 
