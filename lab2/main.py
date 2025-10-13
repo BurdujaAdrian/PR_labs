@@ -1,9 +1,17 @@
 import socket
 import os
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, thread
 import threading
 import time
 now = time.time
+
+RATE_LIMIT = 50
+DELAY = 3
+race_start:float = 0
+
+def INFO(msg):print(f"[INFO]:{msg}")
+def DEBUG(msg): print(f"[DEBUG]:{msg}")
+
 
 class DummyLock:
     def __init__(self) -> None: pass
@@ -109,6 +117,7 @@ def ok_html(data:str)->str:
 
 
 def respond_dir(args: list[str]) -> str:
+    print("")
     path = "./"
     for a in args: path += a + "/"
 
@@ -157,6 +166,7 @@ def respond_dir(args: list[str]) -> str:
 
 
 def respond_file(args:list[str])->tuple[str,bytes]:
+    DEBUG(f"\tStart responding file:{now().__ceil__() %100}")
     path = "./"+args[0]
     for a in args[1:]: path += "/"+a
 
@@ -182,43 +192,57 @@ def respond_file(args:list[str])->tuple[str,bytes]:
         with caches_lock.read(): data = cache_map[path]
 
 
+    DEBUG(f"\tjust before sleep:{now().__ceil__()%100}")
     with files_lock.write():
-        if path not in file_map: file_map[path] = 1
+        if path not in file_map: 
+            #force race condition
+            time.sleep(now() - race_start )
+            file_map[path] = 1
         else: file_map[path] +=1
 
     response = "HTTP/1.1 200 Ok \r\n"+\
               f"Content-Type: {content_type}\r\n"+\
               f"Content-Length: {len(data)}\r\n\r\n"
 
+    DEBUG(f"\tFinished formulating request:{now().__ceil__()%100}")
     return response,data
 
 def handle_client(client:socket.socket):
-    data = client.recv(1024)
-    lines = data.decode().split('\r\n')
-    request = lines[0]
+    DEBUG(f"Request recieved and started{now().__ceil__()%100}")
+    time.sleep(DELAY)
+    try:
+        data = client.recv(1024)
+        lines = data.decode().split('\r\n')
+        request = lines[0]
 
-    #if some malformed request occured
-    if request == "": client.shutdown(socket.SHUT_RDWR); client.close();return
+        #if some malformed request occured
+        if request == "":  client.close();return
 
-    path = request.split(" ")[1]
-    path = path.replace("%20"," ")
+        path = request.split(" ")[1]
+        path = path.replace("%20"," ")
 
-    is_dir = path[-1] == "/"
-    args = path.split("/")
-    args = [arg for arg in args if arg != ""]
+        is_dir = path[-1] == "/"
+        args = path.split("/")
+        args = [arg for arg in args if arg != ""]
 
-    if is_dir:
-        response = respond_dir(args)
-        client.send(response.encode())
-    else:
-        response,data = respond_file(args)
-        client.send(response.encode() + data)
-        if args[0] == "exit": os._exit(0)
-    client.shutdown(socket.SHUT_RDWR)
-    client.close()
+        if is_dir:
+            response = respond_dir(args)
+            client.send(response.encode())
+        else:
+            response,data = respond_file(args)
+            client.send(response.encode() + data)
+            if args[0] == "exit": os._exit(0)
+    except Exception as e:
+        client.send(server_error(e).encode())
+    finally:
+        DEBUG(f"Request finished and sent{now().__ceil__()%100}")
+        client.close()
+
+
+
 
 def main():
-    global client_map, copy_client_map
+    global client_map, copy_client_map,race_start
     with socket.socket(socket.AF_INET,socket.SOCK_STREAM) as server: 
         server.bind(('0.0.0.0',8080))
         server.listen(8)
@@ -243,14 +267,16 @@ def main():
                     if client_ip not in client_map: client_map[client_ip] = (now(),1)
                     else:
                         (timestamp, requests) = client_map[client_ip]
-                        if requests <= 5: client_map[client_ip] = (now(), requests +1)
+                        if requests <= RATE_LIMIT: client_map[client_ip] = (now(), requests +1)
                         else:# if a second or more passed reset
-                            if timestamp - time.time() >= 1: client_map[client_ip] = (now(),1)
+                            if now() - timestamp >= 1: client_map[client_ip] = (now(),1)
                             else:
-                                client.shutdown(socket.SHUT_RDWR)
+                                INFO("Hit rate limit lmao")
                                 client.close()
                                 continue # skip the client
 
+                    race_start = now()
                     pool.submit(handle_client,client)
+
 
 if __name__ == "__main__": main()
