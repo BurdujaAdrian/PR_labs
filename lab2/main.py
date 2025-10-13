@@ -1,15 +1,15 @@
 import socket
 import os
-from concurrent.futures import ThreadPoolExecutor, thread
+from concurrent.futures import ThreadPoolExecutor
 import threading
 import time
 now = time.time
 
 RATE_LIMIT = 50
-DELAY = 3
+DELAY = 1
 
 multithreaded = True
-threadsafe = False
+threadsafe = True
 
 def INFO(msg):print(f"[INFO]:{msg}")
 def DEBUG(msg): print(f"[DEBUG]:{msg}")
@@ -85,6 +85,7 @@ copy_client_map:dict[str,tuple[float,int]] = {}
 MAX_ENTRIES = 1000
 
 def cleanup_file_map():
+    INFO("client map was changed and submitted for cleanup")
     for (ip,(timestamp,requests)) in copy_client_map.items():
         if timestamp > now() + 60: del copy_client_map[ip]
 
@@ -209,7 +210,6 @@ def respond_file(args:list[str])->tuple[str,bytes]:
 
 def handle_client(client:socket.socket):
     DEBUG(f"Request recieved and started{now().__ceil__()%100}")
-    time.sleep(DELAY)
     try:
         data = client.recv(1024)
         lines = data.decode().split('\r\n')
