@@ -21,8 +21,6 @@ def get(addr:str,port:int,path:str)->tuple[bytes,bool]:
             packet = client_sock.recv(4096)
             if len(packet) == 0:
                 break
-
-            print(f"Recieving packets:{packet.decode()}")
             response += packet
 
         return response,True
