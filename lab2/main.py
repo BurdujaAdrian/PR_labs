@@ -7,7 +7,9 @@ now = time.time
 
 RATE_LIMIT = 50
 DELAY = 3
-race_start:float = 0
+
+multithreaded = True
+threadsafe = False
 
 def INFO(msg):print(f"[INFO]:{msg}")
 def DEBUG(msg): print(f"[DEBUG]:{msg}")
@@ -86,8 +88,6 @@ def cleanup_file_map():
     for (ip,(timestamp,requests)) in copy_client_map.items():
         if timestamp > now() + 60: del copy_client_map[ip]
 
-multithreaded = True
-threadsafe = True
 
 if threadsafe:
     files_lock = RW_Lock()
@@ -196,7 +196,7 @@ def respond_file(args:list[str])->tuple[str,bytes]:
     with files_lock.write():
         if path not in file_map: 
             #force race condition
-            time.sleep(now() - race_start )
+            time.sleep(DELAY)
             file_map[path] = 1
         else: file_map[path] +=1
 
@@ -242,7 +242,7 @@ def handle_client(client:socket.socket):
 
 
 def main():
-    global client_map, copy_client_map,race_start
+    global client_map, copy_client_map
     with socket.socket(socket.AF_INET,socket.SOCK_STREAM) as server: 
         server.bind(('0.0.0.0',8080))
         server.listen(8)
@@ -275,7 +275,6 @@ def main():
                                 client.close()
                                 continue # skip the client
 
-                    race_start = now()
                     pool.submit(handle_client,client)
 
 
