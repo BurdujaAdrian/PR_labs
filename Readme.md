@@ -1,187 +1,215 @@
-# Lab1
+# Lab2
 
 ## Elaborated by: Burduja Adrian faf231
 
 ### Theory
-In order to create a http server(without using a dedicated library) it's requred to use the tools the operating
-sysem provides: tcp api.
+A single threaded server has limited ability to serve multiple clients: it's
+limited by the speed at which a single request is processed.
 
-This api varies by operating system but often times, it is abstracted over core libraries.
+In order to fix this issue, each request can be handled in a separate thread.
+This way, 1 request will not become the bottleneck of the server.
 
-Python has such library: socket. It deals with system sockets over which network communication occurs.
+However, threads are not free, creating threads takes time and having them incurs
+a memory cost(the memory a thread takes up is system dependant)
+Moreover, processors ability to paralelyze is dependant on the number of cores.
+If the number of threads exceeds the number of cores, the OS will start managing
+the scheduling of the threads, which might be slow and inneficient
 
-Sockets are a very simply concept, they are simply an ip address and port pair. 
-The system has a limited number of ports, some of which are usually used by particular protocols. In particular, http is usually done over port 80, but sometimes people use 8080 or 8090 as well.
+One way to amortize the cost of creating too many threads is to create a fixed number
+upfront and managing them. This pattern is called a threadpool.
 
-According to Wikipedia:
+In multithreaded context, the nature of how code executes differs significatly from
+simple singlethreaded contexts:
+1. The order of the execution of the code in separate threads is not guarateed
+2. Read/writes happen in steps, which can be interleaved between threads, corrupting
+data
 
-HTTP (Hypertext Transfer Protocol) is an application layer protocol in the Internet 
-protocol suite model for distributed, collaborative, hypermedia information systems. 
-HTTP is the foundation of data communication for the World Wide Web, where hypertext 
-documents include hyperlinks to other resources that the user can easily access, for
-example by a mouse click or by tapping the screen in a web browser.
+In order to solve these problems blocking,atomic operations and mutual exclusion are
+utilised.
 
-HTTP functions as a request–response protocol in the client–server model. A web browser
-, for example, may be the client whereas a process, named web server, running on a 
-\computer hosting one or more websites may be the server. The client submits an HTTP 
-request message to the server. The server, which provides resources such as HTML files
-and other content or performs other functions on behalf of the client, returns a 
-response message to the client. The response contains completion status information 
-about the request and may also contain requested content in its message body.
+- Blocking: a behaviour where a processes execution is paused until it is unblocked.
+Oftentimes IO operations block the parent process until they are finished, but 
+sometimes they can be configured to not block.
+
+- Atomic operations: a behaviour where an operation's context cannot be mutated while
+it executes by other threads, as if the procedure happens in a single whole step.
+Load and store operations are usually done in several steps at the machine code level
+. In order to fix the issue of loads happening in the middle of a write(or vice versa)
+, atomic operations are often provided by the cpu, or can be implemented using other
+atomic primitives.
+
+- Mutual exclusion (mutex): A lock that ensures that only 1 thread can unclock it at
+a time. Mutexes are usually implemented using atomic operations.
+
+If proper measures are not put in place to stop the interleaving of code where it
+shouldn't, horrible bugs can occur which are notoriosly hard to detect and reproduce:
+Race conditions.
+
+- Race condition: a bug where the behaviour of the program is relient on the order
+of the operations in different threads. Incorrect order leads to incorrect behaviour.
+
+### Task In this lab, you will make your HTTP server multithreaded, so that it can handle multiple connections concurrently. You can either create a thread per request, or use a thread pool.
+To test it, write a script that makes multiple concurrent requests to your server. Add a delay to the request handler to simulate work (~1s), make 10 concurrent requests and measure the amount of time in which they are handled. Do the same with the single-threaded server from the previous lab. Compare the two.
+#### Counter: 2 points
+Add a counter feature. Record the number of requests made to each file and show it in the directory listing. For example:
+First, implement it in a naive way and show that there is a race condition (you can rewrite the code and add delays to force interlacing of threads). Then, use a synchronization mechanism (e.g. a lock) and show that the race condition is gone.
+#### Rate limiting: 2 points
+Implement rate limiting by client IP (~5 requests/second) in a thread-safe way. Have one friend spam you with requests and another send requests just below the rate limit. Compare the throughput for both (successful requests/second).
 
 ### Screenshots
+![Race condition commands](./run_bad.png)
+![Race condition effect](./race_cond.png)
+![Correct effect](./fixed.png)
+### Implementation
 
-![File surfing](image(10).png)
-![Serving html](image(11).png)
-![Serving pdf](image(9).png)
-![Serving png](image(8).png)
-![Serving none of the aboce](image(10).png)
-![Running the server locally](image(12).png)
-![Running the server though Docker](image(13).png)
+## Multithreading:
+In order to make use of the cores in my processor. For that I use the Threadpool that
+is provided by the python std:
+```python
+    with socket.socket(socket.AF_INET,socket.SOCK_STREAM) as server: 
+        server.bind(('0.0.0.0',8080))
+        server.listen(8)
 
-### Implementation:server
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            while True:
+                if len(client_map) > MAX_ENTRIES:
+                    temp = client_map
+                    client_map =copy_client_map
+                    copy_client_map = temp
+                    pool.submit(cleanup_file_map)
 
-To use a socket, the python code must define it's values and bind it:
-```main.py
-server = socket.socket(socket.AF_INET,socket.SOCK_STREAM)
-server.bind(('0.0.0.0',8080))
-server.listen(1)
+                client,addr = server.accept()
+                client_ip =addr[0]
+                pool.submit(handle_client,client)
 ```
 
-In the sockets library in particular, it's possible to define the maximum number of 
-incomming connections. It was set to 1 as the server is single threaded anyways, it 
-can only process 1 request at a time.
+`pool.submit` is a function that takes a function and some other argument as arguments,
+and executes that function using the second parameter.
 
-For the server to continuously server files, an infinite loop is requred:
-```main.py
 
-while True:
-    client,addr = server.accept()
-    # rest of the code
-    client.close()
+## Counter
+This is implemeted simply: a dictionary with the relative path as the key and the 
+number of accesses as the value.
+```python
+# definition
+file_map:dict[str,int] = {}
 
+# usage:
+        if path in file_map: file_map[path] +=1
+        else:file_map[path] = 1
 ```
 
-When the server recieves a connection, it needs to record the socket of the client and 
-the return address.
+## Rate limiting
+```python
+client_map:dict[str,tuple[float,int]] = {}
+copy_client_map:dict[str,tuple[float,int]] = {}
+MAX_ENTRIES = 1000
 
-```main.py
-    data = client.recv(1024)
-    lines = data.decode().split('\n')
-    request = lines[0]
+def cleanup_file_map():
+    for (ip,(timestamp,requests)) in copy_client_map.items():
+        if timestamp > now() + 60: del copy_client_map[ip]
+
+# usage:
+
+                    if client_ip not in client_map: client_map[client_ip] = (now(),1)
+                    else:
+                        (timestamp, requests) = client_map[client_ip]
+                        if requests <= RATE_LIMIT: client_map[client_ip] = (now(), requests +1)
+                        else:# if a second or more passed reset
+                            if now() - timestamp >= 1: client_map[client_ip] = (now(),1)
+                            else:
+                                client.close()
+                                continue # skip the client
+# cleanup
+                    if len(client_map) > MAX_ENTRIES:
+                        temp = client_map
+                        client_map =copy_client_map
+                        copy_client_map = temp
+                        pool.submit(cleanup_file_map)
 ```
 
+## Thread safety
 
-The data from the client is recovered via the recv method. The data is in the form of 
-a http response, which has a specific structure. The "request" is the first line, so
-it can be sparated via ```lines[0]```.
+The aformentioned `file_map` is free to be read and mutated by any thread that handles
+a request, because all operations on it must be atomic. To achive this behaviour, I 
+implemented and utilized a read-write lock:
+```python
+class RW_Lock:
+    def __init__(self):
+        self.lock_read = threading.Lock()
+        self.lock_write = threading.Lock()
+        self.lock_readers = threading.Lock()
+        self.readers = 0 
+        
+    # enable `with` syntax
+    class Reader_Lock:
+        def __init__(self,lock):  self.rwlock = lock
+        def __enter__(self): return self
+        def __exit__(self, exc_type, exc_val, exc_tb): self.rwlock.end_read()
 
-```main.py
-    path = request.split(" ")[1]
+    class Writer_Lock:
+        def __init__(self,lock): self.rwlock = lock
+        def __enter__(self): return self
+        def __exit__(self, exc_type, exc_val, exc_tb): self.rwlock.end_write()
+
+    def read(self):
+        # guard against write starvation,writers take precedence
+        # in order to write, one must first be able to aquire the read lock
+        self.lock_read.acquire()
+        self.lock_read.release() # release it imediatly after
+
+        self.lock_readers.acquire()
+        self.readers +=1
+        if self.readers == 1: self.lock_write.acquire()
+        self.lock_readers.release()
+
+        return self.Reader_Lock(self)
+
+    def end_read(self):
+        assert self.readers > 0
+        self.lock_readers.acquire()
+        self.readers -=1
+        if self.readers == 0: self.lock_write.release()
+        self.lock_readers.release()
+
+    def write(self):
+        self.lock_read.acquire()
+        self.lock_write.acquire()
+
+        return self.Writer_Lock(self)
+
+    def end_write(self):
+        self.lock_write.release()
+        self.lock_read.release()
 ```
 
-Next, the "path" is the query the client has sent to the server. Since this server is 
-configured to expect GET requests, it assumes any request is a get request. This could
-be an issue in a real project however this is acceptable if no requiremnt specifically
-asks for it. So, ```request.split(" ")[1]``` is sufficient to get the path.
+A read write lock allows multiple threads to `read` at the same time, but only 1 thread
+can write, and these operations cannot happen at the same time:
+```python
+# initialization
+    files_lock = RW_Lock()
 
-```main.py
-    if is_dir:
-        response = respond_dir(args)
-        client.send(response.encode())
-    else:
-        response,data = respond_file(args)
-        client.send(response.encode() + data)
-        if args[0] == "exit":
-            os._exit(0)
+# read usage
+    with caches_lock.read(): 
+        should_open_file = (path not in cache_map) or not (cache_map[path])
+
+# write usage:
+    with files_lock.write():
+        if path in file_map: file_map[path] +=1
+        else:file_map[path] = 1
 ```
-
-This is the most vital part of the program, it dicides how to process the request.
-```respond_dir``` returns a generated html text to show the files in the directory
-requested.
-
-```respond_file``` will return the text file requested, if it is a html file, else
-it return a 404 response:
-```main.py
-def not_found():
-    return "HTTP/1.1 404 Not Found\r\n\r\n"
-```
-
-Since both ```respond_*``` functions usually return a html file, they both have a 
-similar mechanism for formting the response:
-```main.py
-    response = "HTTP/1.1 200 Ok \r\n"+\
-               "Content-Type: text/html\r\n"+\
-              f"Content-Length: {len(data)}\r\n\r\n"
-
-    return response,data
-```
-
-Here we first add the response type with the first line (200 Ok in this case).
-Then we specify the content type and length.
-
-When it returns, the response together with the data is sent back to the client.
-
-
-### Implementation:client
-
-For the client, a simple library was the condition. In order to access the server,
-only get requests are requred, therefore only the functions ```get``` and 
-```get_parsed``` were implemented:
-
-```client.py
-def get(addr:str,port:int,path:str)->tuple[str,bool]:
-    client_sock = socket.socket(socket.AF_INET,socket.SOCK_STREAM)
-
-    try:
-        client_sock.connect((addr,port))
-
-        request = f"GET {path} HTTP/1.1\r\n"+\
-                  f"Host: {addr}\r\n\r\n"
-
-        client_sock.sendall(request.encode())
-
-        response = b""
-
-        while True:
-            packet = client_sock.recv(4096)
-            if len(packet) == 0:
-                break
-
-            response += packet
-
-        return response.decode(),True
-    except Exception as e:
-            return f"Exception: {e}",False
-
-    finally:
-        client_sock.close()
-
-def get_parsed(addr:str,port:int,path:str)->tuple[str,int,bool]:
-    response, ok = get(addr,port,path)
-    if not ok:
-        return response,0,False
-    
-    headers, body= response.split("\r\n\r\n",1)
-    
-    code = int(headers.split(" ")[1])
-
-    return body,code,True
-```
-
-Both functions take the same input: address of the server, the port it's serving on 
-and the path or the file requested. ```get``` will send the get request, 
-```get_parsed``` calls it but also parses the response to return only the body and the
-request code.
 
 
 ### Conclusion
-This laboratory successfully demonstrated the creation of a functional HTTP server from the ground up. We built a simple but effective web server that serves HTML files and provides directory listings using raw socket programming in Python. The project provided hands-on experience with HTTP protocol implementation, request parsing, and proper response formatting.
-
-Through this exercise, we gained practical understanding of how web servers fundamentally operate - from handling TCP connections to generating valid HTTP responses with appropriate status codes and content types. The implementation also included Docker containerization for consistent deployment and a basic client library for testing server functionality.
-
-While encountering real-world challenges like network configuration and concurrent connection handling, we developed a solid foundation in web server architecture. This project successfully bridges theoretical HTTP knowledge with practical implementation, providing essential insights into the underlying mechanics of web communication that power modern internet applications.
-
-
+This laboratory successfully enhanced the HTTP server with multithreading, thread-safe
+counters, and rate limiting. The implementation used a ThreadPoolExecutor to handle 
+concurrent connections, achieving significant performance improvements over the 
+single-threaded version. A custom read-write lock was developed to resolve race 
+conditions in the access counter, ensuring data consistency while maintaining 
+performance. Rate limiting was implemented using a dual-map swapping mechanism to 
+efficiently track client requests while preventing memory leaks. The project 
+demonstrated practical understanding of concurrent programming challenges and their 
+solutions, including proper synchronization techniques and resource management in 
+multi-threaded environments.
 
 
