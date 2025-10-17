@@ -36,7 +36,8 @@ class RW_Lock:
         self.lock_write = threading.Lock()
         self.lock_readers = threading.Lock()
         self.readers = 0 
-        
+
+    # enable `with` syntax
     class Reader_Lock:
         def __init__(self,lock):  self.rwlock = lock
         def __enter__(self): return self
@@ -269,7 +270,7 @@ def main():
                         (timestamp, requests) = client_map[client_ip]
                         if requests <= RATE_LIMIT: client_map[client_ip] = (now(), requests +1)
                         else:# if a second or more passed reset
-                            if now() - timestamp >= 1: client_map[client_ip] = (now(),1)
+                            if now() - timestamp >= 1: client_map[client_ip] = (now(),0)
                             else:
                                 INFO("Hit rate limit lmao")
                                 client.close()
