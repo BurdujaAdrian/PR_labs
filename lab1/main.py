@@ -1,9 +1,9 @@
 import socket
 import os
-
+import time
 
 local_files = os.listdir('.')
-print(f'files:\n{local_files}')
+# print(f'files:\n{local_files}')
 
 server = socket.socket(socket.AF_INET,socket.SOCK_STREAM)
 
@@ -95,11 +95,12 @@ def respond_file(args:list[str])->tuple[str,bytes]:
 while True:
     client,addr = server.accept()
     
+    time.sleep(1)
     data = client.recv(1024)
     lines = data.decode().split('\r\n')
     request = lines[0]
 
-    print(f"request : {request}")
+    # print(f"request : {request}")
     if request == "": #if some malformed request occured
         client.close()
         continue
