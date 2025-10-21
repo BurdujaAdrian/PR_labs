@@ -48,6 +48,7 @@ Race conditions.
 - Race condition: a bug where the behaviour of the program is relient on the order
 of the operations in different threads. Incorrect order leads to incorrect behaviour.
 
+
 ### Task In this lab, you will make your HTTP server multithreaded, so that it can handle multiple connections concurrently. You can either create a thread per request, or use a thread pool.
 To test it, write a script that makes multiple concurrent requests to your server. Add a delay to the request handler to simulate work (~1s), make 10 concurrent requests and measure the amount of time in which they are handled. Do the same with the single-threaded server from the previous lab. Compare the two.
 #### Counter: 2 points
@@ -60,6 +61,11 @@ Implement rate limiting by client IP (~5 requests/second) in a thread-safe way. 
 ![Race condition commands](./run_bad.png)
 ![Race condition effect](./race_cond.png)
 ![Correct effect](./fixed.png)
+![Testing lab 2 impl](./lab2_test.png)
+![Testing lab 1 impl](./lab1_test.png)
+![Testing lab1 with simulated work](./lab1_test_delay.png)
+![Ip alliasing](./ip_aliassing.png)
+![Bad friend vs Good friend](./simul_test.png)
 ### Implementation
 
 ## Multithreading:
@@ -127,6 +133,15 @@ def cleanup_file_map():
                         copy_client_map = temp
                         pool.submit(cleanup_file_map)
 ```
+
+It's not alwasy realistic to have a friend at hand to lend their machine to test your
+http server's implementation of rate limiting. Since rate limiting is cares about
+IP, one would normally need multiple machines to simulate multiple IP addresses.
+
+However, smart people have though of this scenario and have come up with IP alliasing
+. On windows in particular it's possible to setup extra IP addresses on the ethernet
+interface to use locally.
+
 
 ## Thread safety
 
