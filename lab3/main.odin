@@ -97,6 +97,9 @@ gen_board :: proc(owner: string) -> string {
 }
 
 evacuate_tile :: proc(pos: [2]int) {
+	// if pos is <NONE>, do nothing
+	if pos == -1 do return
+
 	tile := &board[pos.x][pos.y]
 	tile.owner = ""
 	if len(tile.wait_list) > 0 {
@@ -277,6 +280,7 @@ handle_flip :: proc(_: ^http.Handler, req: ^http.Request, res: ^http.Response) {
 	location[1] = atoi(loc_str[1])
 
 	in_wait_list: bool = true
+	// TODO: check if this is sane, if finished
 	for in_wait_list { 	// loop while in the wait_list
 		in_wait_list = false // assume will not be in waitlist
 		log.debugf("update players %s state on flip", player_id)
@@ -307,7 +311,7 @@ handle_flip :: proc(_: ^http.Handler, req: ^http.Request, res: ^http.Response) {
 				log.debug("update player ", player_id)
 				tile := &board[location[0]][location[1]]
 
-				if tile.card == "" {
+				if tile.card == "" { 	// if card is non  existant
 					log.debugf("Player %s flipped non-existent card", player_id)
 					old_choices := players[idx].choices
 					players[idx].choices = -1
@@ -315,114 +319,54 @@ handle_flip :: proc(_: ^http.Handler, req: ^http.Request, res: ^http.Response) {
 					evacuate_tile(old_choices[0])
 					evacuate_tile(old_choices[1])
 
-				} else do switch {
+				} else if tile.owner == player_id { 	// if card is occupied by me
+
+					log.debugf("Player %s flipped card they already controlled ", player_id)
+					old_choices := players[idx].choices
+					players[idx].choices = -1
+
+					evacuate_tile(old_choices[0])
+					evacuate_tile(old_choices[1])
+
+				} else if tile.owner != "" {
+					log.debugf(
+						"Player %s flipped card that is already controlled by %s",
+						player_id,
+						tile.owner,
+					)
+
+					append(&tile.wait_list, player_id)
+					// PERF: redundant check
+				} else if tile.owner == "" do switch {
 
 				case players[idx].choices[0] == -1:
 					log.debugf("Player's %s first choice", player_id)
-					players[idx].choices[0] = location
+					players[idx].choices = {location, -1}
 
-					assert(players[idx].choices[1] == -1)
-
-					log.debugf(
-						"Resolving board modification of tile %v-%v(%v) by %s",
-						location[0],
-						location[1],
-						tile,
-						player_id,
-					)
-
-					switch tile.owner {
-					case "":
-						log.debugf(
-							"Tile %v-%v(%v) captured by player %s",
-							location[0],
-							location[1],
-							tile,
-							player_id,
-						)
-						tile.owner = player_id
-					case player_id:
-						internal_error(
-							res,
-							"tile is controlled by player despite it being their first move",
-							0,
-						)
-						return
-					case:
-						append(&tile.wait_list, player_id)
-						log.debugf("Player %s was put on waitlist for %v", player_id, tile)
-						in_wait_list = true
-					}
+					log.debugf("Tile %v-%v(%v) captured by player %s", location[0], location[1], tile, player_id)
+					tile.owner = player_id
 
 				case players[idx].choices[1] == -1:
 					log.debugf("Players %s second choice", player_id)
 					players[idx].choices[1] = location
 
-					log.debugf(
-						"Resolving board modification of tile %v-%v(%v) by %s",
-						location[0],
-						location[1],
-						tile,
-						player_id,
-					)
-					switch tile.owner {
-					case "":
-						log.debugf(
-							"Tile %v-%v(%v) captured by player %s",
-							location[0],
-							location[1],
-							tile,
-							player_id,
-						)
-						tile.owner = player_id
-					case player_id:
-						internal_error(res, "should return before this point in /flip", 0)
-						return
-					case:
-						append(&tile.wait_list, player_id)
-						log.debugf("Player %s was put on waitlist for %v", player_id, tile)
-						in_wait_list = true
-					}
+					log.debugf("Tile %v-%v(%v) captured by player %s", location[0], location[1], tile, player_id)
+					tile.owner = player_id
 				case:
 					log.debugf("Player's %s third choice", player_id)
 					old_choice := players[idx].choices
 					players[idx].choices = {location, -1}
 
-					old_tile1 := &board[old_choice[0][0]][old_choice[0][1]]
-					old_tile2 := &board[old_choice[1][0]][old_choice[1][1]]
+					evacuate_tile(old_choice[0])
+					evacuate_tile(old_choice[0])
 
-					old_tile1.card = ""
-					old_tile2.card = ""
-
-					log.debugf(
-						"Resolving board modification of tile %v-%v(%v) by %s",
-						location[0],
-						location[1],
-						tile,
-						player_id,
-					)
-					switch tile.owner {
-					case "":
-						log.debugf(
-							"Tile %v-%v(%v) captured by player %s",
-							location[0],
-							location[1],
-							tile,
-							player_id,
-						)
-						tile.owner = player_id
-					case player_id:
-						internal_error(
-							res,
-							"tile is controlled by player despite it being their first move",
-							0,
-						)
-						return
-					case:
-						append(&tile.wait_list, player_id)
-						log.debugf("Player %s was put on waitlist for %v", player_id, tile)
-						in_wait_list = true
-					}
+					log.debugf("Tile %v-%v(%v) captured by player %s", location[0], location[1], tile, player_id)
+					tile.owner = player_id
+				}
+				else {
+					// PERF: tail of redundant check
+					internal_error(res, "how", 0)
+					return
 				}
 
 			}
