@@ -6,7 +6,7 @@ import time
 now = time.time
 
 def main():
-    global client_map, copy_client_map
+    global client_map
     with socket.socket(socket.AF_INET,socket.SOCK_STREAM) as server: 
         server.bind(('0.0.0.0',8080))
         server.listen(8)
