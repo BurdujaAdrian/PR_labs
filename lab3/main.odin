@@ -2,6 +2,8 @@
 package main
 
 import "base:builtin"
+import "core:fmt"
+import "core:log"
 import "core:mem"
 import "core:os"
 import "core:slice"
@@ -10,6 +12,8 @@ import str "core:strings"
 import "core:sync"
 import "core:thread"
 import "core:time"
+import http "odin-http"
+
 write_str :: str.write_string
 write_int :: str.write_int
 write_char :: str.write_rune
@@ -21,6 +25,7 @@ guard :: sync.mutex_guard
 map_f :: slice.mapper
 find :: slice.linear_search
 
+//@helper generic
 unwrap :: #force_inline proc(something: $T, ok: $D, loc := #caller_location) -> T {
 	assert_contextless(ok)
 	return something
@@ -30,12 +35,17 @@ atoi :: proc(num: string) -> int {
 	return unwrap(strconv.parse_int(num, 10))
 }
 
-import "core:fmt"
-import "core:log"
 
-import http "odin-http"
+//@server helpers
+internal_error :: proc(res: ^http.Response, msg: string, err: $E) {
+	log.error(msg, err)
+	http.headers_set(&res.headers, "Access-Control-Allow-Origin", "*")
+	http.body_set_str(res, fmt.aprint(msg, err))
+	http.respond_with_status(res, .Internal_Server_Error)
+}
 
 
+//@data types
 Tile :: struct {
 	card:      string,
 	owner:     string,
@@ -44,70 +54,85 @@ Tile :: struct {
 
 Player :: struct {
 	id:      string,
-	choices: [2][]int,
+	choices: [2][2]int,
+	// only 2 states can persist: no choice or only 1 choice
 }
 
+GameErr :: enum {
+	THREE_CHOICES,
+	NO_SECOND_CHOICE,
+}
+
+gen_board :: proc(owner: string) -> string {
+	builder: str.Builder
+
+	write_int(&builder, len(board[0]))
+	write_char(&builder, 'x')
+	write_int(&builder, len(board))
+
+	for row in board {
+		inner: for tile in row {
+			write_str(&builder, "\n")
+			if tile.card == "" {
+				// card was taken
+				write_str(&builder, "none")
+			} else if tile.owner == owner {
+				// owner is trying to take it
+				write_str(&builder, "my ")
+				write_str(&builder, tile.card)
+				write_str(&builder, "\n")
+			} else if tile.owner == "" {
+				write_str(&builder, "down\n")
+				continue inner
+			} else {
+				// there is an owner, just not you
+				write_str(&builder, "up ")
+				write_str(&builder, tile.card)
+			}
+		}
+
+	}
+
+	return str.to_string(builder)
+}
+
+// memory
+global_allocator: mem.Allocator
+
+// gamestate
+//	// board
+board: [][]Tile
+board_lock: sync.RW_Mutex
+
+//	// watch
+update_watch: sync.Cond
+update_lock: sync.Mutex
+
+
+//	// playerstate
+players: #soa[dynamic]Player
+player_lock: sync.Mutex
 
 main :: proc() {
-	// memory
-	// TODO:figure out if you need this even
-	_global_allocator: mem.Mutex_Allocator
-	@(static) global_allocator: mem.Allocator
-	global_allocator = mem.mutex_allocator(&_global_allocator) // defaut heap allocator
 
-	// gamestate
-	//	// board
-	@(static) board: [][]Tile
-	@(static) board_lock: sync.RW_Mutex
+	global_allocator = context.allocator // defaut heap allocator
+
 	// TODO: initialize board by parsing a txt file
 	board = make([][]Tile, 6) // initialize board
 	for &row, i in board {
 		row = make([]Tile, 4)
-	}
-
-	//	// watch
-	@(static) update_watch: sync.Cond
-	@(static) update_lock: sync.Mutex
-
-
-	//	// playerstate
-	@(static) players: #soa[dynamic]Player
-	@(static) player_lock: sync.Mutex
-	players = make_soa_dynamic_array(#soa[dynamic]Player) // initiate it with default heap allocator
-
-
-	gen_board :: proc(owner: string) -> string {
-		builder: str.Builder
-
-		write_int(&builder, len(board[0]))
-		write_char(&builder, 'x')
-		write_int(&builder, len(board))
-
-		for row in board {
-			inner: for tile in row {
-				write_str(&builder, "\n")
-				if tile.card == "" {
-					// card was taken
-					write_str(&builder, "none")
-				} else if tile.owner == owner {
-					// owner is trying to take it
-					write_str(&builder, "my ")
-					write_str(&builder, tile.card)
-					write_str(&builder, "\n")
-				} else if tile.owner == "" {
-					write_str(&builder, "down\n")
-					continue inner
-				} else {
-					// there is an owner, just not you
-					write_str(&builder, "up ")
-					write_str(&builder, tile.card)
-				}
-			}
-
+		for &tile in &row {
+			tile.wait_list, _ = make([dynamic]string)
 		}
-
-		return str.to_string(builder)
 	}
+
+	players = make_soa_dynamic_array(#soa[dynamic]Player) // initiate it with default heap allocator
+	/*
+	*	Lock hierarchy:
+	*	player > board
+	*/
+
+
 	router: http.Router
 	http.router_init(&router)
 	defer http.router_destroy(&router)
@@ -130,13 +155,16 @@ main :: proc() {
 			player_id := req.url_params[0]
 			if guard(&player_lock) {
 				p_len := len(players)
-				_, exists := find(players.id[:p_len], player_id)
+				idx, exists := find(players.id[:p_len], player_id)
 
-				if !exists do append_soa_elem(&players, Player{id = player_id})
+				if !exists do if _, err := append_soa_elem(&players, Player{id = player_id}); err != nil {
+					internal_error(res, "Allocation error in /watch, failed to allocate new player", err)
+					return
+				}
 			}
 
 			boardstate: string
-			if guard_read(&board_lock) do boardstate = gen_board("")
+			if guard_read(&board_lock) do boardstate = gen_board(player_id)
 
 
 			http.headers_set(&res.headers, "Access-Control-Allow-Origin", "*")
@@ -147,82 +175,35 @@ main :: proc() {
 	})
 	http.route_get(&router, "/watch/(.+)", {
 		handle = proc(h: ^http.Handler, req: ^http.Request, res: ^http.Response) {
+			req_arena: mem.Arena
+			req_buff: [4096]u8
+			mem.arena_init(&req_arena, req_buff[:])
+			context.allocator = mem.arena_allocator(&req_arena)
+
 			log.debug("request", req.url)
 
 			player_id := req.url_params[0]
 			if guard(&player_lock) {
 				p_len := len(players)
-				_, exists := find(players.id[:p_len], player_id)
+				idx, exists := find(players.id[:p_len], player_id)
 
-				if !exists do append_soa_elem(&players, Player{id = player_id})
+				if !exists do if _, err := append_soa_elem(&players, Player{id = player_id}); err != nil {
+					internal_error(res, "Allocation error in /watch, failed to allocate new player", err)
+					return
+				}
 			}
 
 			boardstate: string
 			if guard_read(&board_lock) do boardstate = gen_board("")
 
-			log.info("waiting on", update_watch, &update_watch)
+			log.info("waiting on", update_watch)
 			sync.cond_wait(&update_watch, &update_lock)
 
 			http.headers_set(&res.headers, "Access-Control-Allow-Origin", "*")
 			http.respond_plain(res, boardstate)
 		},
 	})
-	http.route_get(&router, "/flip/(.+)/(.+)", {
-		handle = proc(h: ^http.Handler, req: ^http.Request, res: ^http.Response) {
-			log.debug("request", req.url)
-
-			player_id := req.url_params[0]
-			location: []int = map_f(str.split(req.url_params[1], ","), atoi)
-			if guard(&player_lock) {
-				p_len := len(players)
-				idx, exists := find(players.id[:p_len], player_id)
-
-				if !exists {
-					player_data := Player {
-						id = player_id,
-					}
-					player_data.choices[0] = location
-					append_soa_elem(&players, Player{id = player_id})
-				} else {
-					player_data := players[idx]
-					switch {
-					case player_data.choices[0] == nil:
-						players[idx].choices[0] = location
-					case player_data.choices[1] == nil:
-						players[idx].choices[1] = location
-					case:
-
-					}
-				}
-			}
-
-
-			tile: ^Tile
-			if guard_write(&board_lock) do if guard(&player_lock) {
-				tile = &(board[location[0]][location[1]])
-				switch tile.owner {
-				case "":
-					tile.owner = player_id
-				case player_id:
-				case:
-					append(&tile.wait_list, player_id)
-				}
-			}
-
-
-			boardstate: string
-			if guard_read(&board_lock) do boardstate = gen_board("")
-
-			log.debug(boardstate)
-
-			http.headers_set(&res.headers, "Access-Control-Allow-Origin", "*")
-			http.respond_plain(res, boardstate)
-
-			sync.cond_broadcast(&update_watch)
-			log.info("Broadcasted to", update_watch, &update_watch)
-		},
-		next = &delay_handler,
-	})
+	http.route_get(&router, "/flip/(.+)/(.+)", {next = &delay_handler})
 
 	http.route_get(&router, "/replace/(.+)/(.+)/(.+)", {
 		handle = proc(h: ^http.Handler, req: ^http.Request, res: ^http.Response) {
@@ -269,5 +250,175 @@ main :: proc() {
 		}
 	}
 
+
+}
+handle_flip :: proc(h: ^http.Handler, req: ^http.Request, res: ^http.Response) {
+	req_arena: mem.Arena
+	req_buff: [4096]u8
+	mem.arena_init(&req_arena, req_buff[:])
+	context.allocator = mem.arena_allocator(&req_arena)
+
+	log.debug("parsing request further for ", req.url)
+
+	player_id := req.url_params[0]
+	loc_str, _ := str.split(req.url_params[1], ",")
+
+	location: [2]int
+	location[0] = atoi(loc_str[0])
+	location[1] = atoi(loc_str[1])
+
+	log.debugf("update players %s state on flip", player_id)
+	has_matching: bool
+	in_wait_list: bool
+	if guard(&player_lock) {
+		p_len := len(players)
+		idx, exists := find(players.id[:p_len], player_id)
+
+		if !exists {
+			log.debug("append new player", player_id)
+			player_data := Player {
+				id      = player_id,
+				choices = {location, -1},
+			}
+			if _, err := append_soa_elem(&players, player_data); err != nil {
+				internal_error(res, "Allocation error in /flip, append new player:", err)
+				return
+			}
+		}
+
+		log.debugf("Attempting to update board based on state %v of %s", players[idx], player_id)
+		if guard_write(&board_lock) {
+
+			log.debug("update player ", player_id)
+			tile := &board[location[0]][location[1]]
+
+			if tile.card == "" {
+				log.debugf("Player %s flipped non-existent card", player_id)
+				players[idx].choices = -1
+
+			} else do switch {
+
+			case players[idx].choices[0] == -1:
+				log.debugf("Player's %s first choice", player_id)
+				players[idx].choices[0] = location
+
+				assert(players[idx].choices[1] == -1)
+
+				log.debugf(
+					"Resolving board modification of tile %v-%v(%v) by %s",
+					location[0],
+					location[1],
+					tile,
+					player_id,
+				)
+
+				switch tile.owner {
+				case "":
+					log.debugf(
+						"Tile %v-%v(%v) captured by player %s",
+						location[0],
+						location[1],
+						tile,
+						player_id,
+					)
+					tile.owner = player_id
+				case player_id:
+					internal_error(
+						res,
+						"tile is controlled by player despite it being their first move",
+						0,
+					)
+					return
+				case:
+					append(&tile.wait_list, player_id)
+					log.debugf("Player %s was put on waitlist for %v", player_id, tile)
+					in_wait_list = true
+				}
+
+			case players[idx].choices[1] == -1:
+				log.debugf("Players %s second choice", player_id)
+				players[idx].choices[1] = location
+
+				log.debugf(
+					"Resolving board modification of tile %v-%v(%v) by %s",
+					location[0],
+					location[1],
+					tile,
+					player_id,
+				)
+				switch tile.owner {
+				case "":
+					log.debugf(
+						"Tile %v-%v(%v) captured by player %s",
+						location[0],
+						location[1],
+						tile,
+						player_id,
+					)
+					tile.owner = player_id
+				case player_id:
+					internal_error(res, "should return before this point in /flip", 0)
+					return
+				case:
+					append(&tile.wait_list, player_id)
+					log.debugf("Player %s was put on waitlist for %v", player_id, tile)
+					in_wait_list = true
+				}
+			case:
+				log.debugf("Player's %s third choice", player_id)
+				old_choice := players[idx].choices
+				players[idx].choices = {location, -1}
+
+				old_tile1 := &board[old_choice[0][0]][old_choice[0][1]]
+				old_tile2 := &board[old_choice[1][0]][old_choice[1][1]]
+
+				old_tile1.card = ""
+				old_tile2.card = ""
+
+				log.debugf(
+					"Resolving board modification of tile %v-%v(%v) by %s",
+					location[0],
+					location[1],
+					tile,
+					player_id,
+				)
+				switch tile.owner {
+				case "":
+					log.debugf(
+						"Tile %v-%v(%v) captured by player %s",
+						location[0],
+						location[1],
+						tile,
+						player_id,
+					)
+					tile.owner = player_id
+				case player_id:
+					internal_error(
+						res,
+						"tile is controlled by player despite it being their first move",
+						0,
+					)
+					return
+				case:
+					append(&tile.wait_list, player_id)
+					log.debugf("Player %s was put on waitlist for %v", player_id, tile)
+					in_wait_list = true
+				}
+			}
+
+		}
+	}
+
+
+	boardstate: string
+	if guard_read(&board_lock) do boardstate = gen_board("")
+
+	log.debug(boardstate)
+
+	sync.cond_broadcast(&update_watch)
+	log.info("Broadcasted to", update_watch, &update_watch)
+
+	http.headers_set(&res.headers, "Access-Control-Allow-Origin", "*")
+	http.respond_plain(res, boardstate)
 
 }
