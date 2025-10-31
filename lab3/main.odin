@@ -7,6 +7,7 @@ import "core:fmt"
 import "core:hash/xxhash"
 import "core:log"
 import "core:mem"
+import "core:net"
 import "core:os"
 import "core:os/os2"
 import "core:slice"
@@ -277,13 +278,14 @@ main :: proc() {
 				hash_map[player_id] = player_name
 			}
 
-			from := req.url_params[1]
-			to := req.url_params[2]
+			from, from_ok := net.percent_decode(req.url_params[1])
+			to, to_ok := net.percent_decode(req.url_params[2])
 			from_hash := hash(from)
 			to_hash := hash(to)
-			hash_map[to_hash] = to
+			hash_map[to_hash] = str.clone(to, hash_map.allocator)
 
-			for &tile_card in board.card[:board_size] {
+			for &tile_card, i in board.card[:board_size] {
+				_tile := board[i]
 				if tile_card == from_hash do tile_card = to_hash
 			}
 
