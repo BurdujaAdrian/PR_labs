@@ -361,7 +361,6 @@ handle_flip :: proc(_: ^http.Handler, req: ^http.Request, res: ^http.Response) {
 						// no card here
 						// operations fails and you do nothing
 						board_was_updated()
-						log.infof("%s has choses empty tile:%v as the first card", player_id, tile)
 						break loop
 					}
 
@@ -372,17 +371,6 @@ handle_flip :: proc(_: ^http.Handler, req: ^http.Request, res: ^http.Response) {
 								pop_front(&board[tile_pos].wait_list)
 								in_wait_list = false
 							}
-							log.infof(
-								"%s has choses free tile:%v as the first card, and was in wait list",
-								player_id,
-								tile,
-							)
-						} else {
-							log.infof(
-								"%s has choses free tile:%v as the first card, and was not in wait list",
-								player_id,
-								tile,
-							)
 						}
 						// free card
 
@@ -408,13 +396,6 @@ handle_flip :: proc(_: ^http.Handler, req: ^http.Request, res: ^http.Response) {
 						in_wait_list = true
 						place_back(&board[tile_pos].wait_list, player_id)
 						// the choice is not saved, as it's not allowed yet
-
-						log.infof(
-							"%s has choses an occupied tile:%v by %sas the first card, now is in wait list",
-							player_id,
-							tile,
-							tile.owner,
-						)
 					}
 					continue loop
 
@@ -434,11 +415,6 @@ handle_flip :: proc(_: ^http.Handler, req: ^http.Request, res: ^http.Response) {
 						evacuate_tile(old_choice - 1)
 						board_was_updated()
 
-						log.infof(
-							"%s chose empty tile %v as the second choice, dicard previous choice",
-							player_id,
-							tile,
-						)
 						break loop
 					}
 
@@ -451,27 +427,14 @@ handle_flip :: proc(_: ^http.Handler, req: ^http.Request, res: ^http.Response) {
 						// i wasn't added to waitlist, i shouldn't touch it either
 
 						board_was_updated()
-						log.infof(
-							"%s chose an owned tile %v by %s as the second choice, dicard previous choice",
-							player_id,
-							tile,
-							tile.owner,
-						)
 
 						break loop
 					}
 
 					//if tile.owner == ""
 					// #2-cde
-
 					board[tile_pos].owner = player_id
 					board_was_updated()
-
-					log.infof(
-						"%s chose empty tile %v as the second choice, wait for 3rd",
-						player_id,
-						tile,
-					)
 
 					break loop
 				case:
