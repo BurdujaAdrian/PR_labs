@@ -4,6 +4,7 @@ package main
 import "base:builtin"
 import "base:runtime"
 import "core:fmt"
+import "core:hash/xxhash"
 import "core:log"
 import "core:mem"
 import "core:os"
@@ -45,55 +46,71 @@ internal_error :: proc(res: ^http.Response, msg: string, err: $E) {
 	http.respond_with_status(res, .Internal_Server_Error)
 }
 
+hash :: #force_inline proc(text: string) -> (res: u64) {
+	res = xxhash.XXH3_64_default(transmute([]u8)text)
+	assert(res != NO_STRING)
+	return
+}
+
+find_player_pos :: proc(player_id: u64) -> (res: [2]int) {
+	for id, i in board.owner[:board_size] {
+		if player_id == id {
+			switch {
+			case res[0] == 0:
+				res[0] = i + 1
+			case res[1] == 0:
+				res[1] = i + 1
+			case:
+				assert(res[0] != 0 && res[1] != 0)
+				fmt.assertf(false, "Any player should not have more than 2 cards owned at a time")
+			}
+		}
+	}
+	return
+}
 
 //@data types
+MAX_PLAYERS :: 10
+NO_STRING :: 0
 Tile :: struct {
-	card:      string,
-	owner:     string,
-	wait_list: [dynamic]string,
+	card:      u64,
+	owner:     u64,
+	wait_list: [MAX_PLAYERS]u64,
 }
 
-Player :: struct {
-	id:      string,
-	choices: [2][2]int,
-
-	// only 2 states can persist: no choice or only 1 choice
-}
 
 GameErr :: enum {
 	THREE_CHOICES,
 	NO_SECOND_CHOICE,
 }
 
-gen_board :: proc(owner: string, loc := #caller_location) -> string {
-	fmt.assertf(owner != "", "the owner when calling gen board should not be \"\"", loc = loc)
+gen_board :: proc(owner: u64, loc := #caller_location) -> string {
+	fmt.assertf(
+		owner != NO_STRING,
+		"the owner when calling gen board should not be \"\"",
+		loc = loc,
+	)
 	builder: str.Builder
 
-	write_int(&builder, len(board))
+	write_int(&builder, board_h)
 	write_char(&builder, 'x')
-	write_int(&builder, len(board[0]))
+	write_int(&builder, board_w)
 
-	for row in board {
-		inner: for tile in row {
-			write_str(&builder, "\n")
-			if tile.card == "" {
-				// card was taken
-				write_str(&builder, "none")
-			} else if tile.owner == owner {
-				// owner is trying to take it
-				write_str(&builder, "my ")
-				write_str(&builder, tile.card)
-				// write_str(&builder, "|")
-				// write_str(&builder, tile.owner)
-			} else if tile.owner == "" {
-				write_str(&builder, "down")
-			} else {
-				// there is an owner, just not you
-				write_str(&builder, "up ")
-				write_str(&builder, tile.card)
-				// write_str(&builder, "|")
-				// write_str(&builder, tile.owner)
-			}
+	for tile in board {
+		write_str(&builder, "\n")
+		if tile.card == NO_STRING {
+			// card was taken
+			write_str(&builder, "none")
+		} else if tile.owner == owner {
+			// owner is trying to take it
+			write_str(&builder, "my ")
+			write_str(&builder, hash_map[tile.card])
+		} else if tile.owner == NO_STRING {
+			write_str(&builder, "down")
+		} else {
+			// there is an owner, just not you
+			write_str(&builder, "up ")
+			write_str(&builder, hash_map[tile.card])
 		}
 
 	}
@@ -101,14 +118,34 @@ gen_board :: proc(owner: string, loc := #caller_location) -> string {
 	return str.to_string(builder)
 }
 
-evacuate_tile :: proc(pos: [2]int) {
+evacuate_tile :: proc(pos: int) -> (old_tile: Tile) {
 	// if pos is <NONE>, do nothing
 	if pos == -1 do return
 
-	tile := &board[pos.x][pos.y]
-	delete(tile.owner, global_allocator)
-	tile.owner = ""
+	old_tile = board[pos]
+	board[pos].owner = pop_front(&board[pos].wait_list)
 
+	return
+}
+
+pop_front :: #force_inline proc(list: ^[MAX_PLAYERS]u64) -> (front: u64) {
+	front = list[0]
+	#unroll for i in 0 ..< MAX_PLAYERS - 1 {
+		list[i] = list[i + 1]
+	}
+	return
+}
+
+place_back :: #force_inline proc(list: ^[MAX_PLAYERS]u64, p_id: u64) {
+	p_id := p_id
+	#unroll for i in 0 ..< MAX_PLAYERS - 1 {
+		if list[i] == 0 {
+			list[i] = p_id
+			p_id = 0
+		}
+	}
+	// has inserted succesfully
+	assert(p_id == 0)
 }
 
 // memory
@@ -116,8 +153,10 @@ global_allocator: mem.Allocator
 
 // gamestate
 //	// board
-board: [][]Tile
+board: #soa[]Tile
+board_w, board_h, board_size: int
 board_lock: sync.RW_Mutex
+hash_map: map[u64]string
 
 //	// watch
 update_watch: sync.Cond
@@ -131,26 +170,22 @@ board_was_updated :: #force_inline proc() {
 	}
 }
 
-//	// playerstate
-players: #soa[dynamic]Player
-player_lock: sync.Mutex
 
 main :: proc() {
 
 	global_allocator = context.allocator // defaut heap allocator
 
 	// TODO: initialize board by parsing a txt file
-	board = make([][]Tile, 6) // initialize board
-	for &row, i in &board {
-		row = make([]Tile, 4)
-		for &tile in &row {
-			tile.wait_list, _ = make([dynamic]string, global_allocator)
-			tile.card = "A" if i % 2 == 0 else "B" // for now it's all A
-			tile.owner = ("")
-		}
+	board_w = 4
+	board_h = 6
+	board_size = board_h * board_w
+	board = make_soa_slice(#soa[]Tile, board_size) // initialize board
+	for &tile, i in board {
+		tile.card = hash("Me") if i % 2 == 0 else hash("You")
 	}
+	hash_map[hash("Me")] = "Me"
+	hash_map[hash("You")] = "You"
 
-	players = make_soa_dynamic_array(#soa[dynamic]Player) // initiate it with default heap allocator
 	/*
 	*	Lock hierarchy:
 	*	player > board > watch
@@ -175,12 +210,10 @@ main :: proc() {
 			context.allocator = mem.arena_allocator(&req_arena)
 
 
-			player_id := req.url_params[0]
-			if guard(&player_lock) {
-				p_len := len(players)
-				idx, exists := find(players.id[:p_len], player_id)
-
-				if !exists do append_soa_elem(&players, Player{id = player_id, choices = -1})
+			player_name := req.url_params[0]
+			player_id := hash(player_name)
+			if !(player_id in hash_map) {
+				hash_map[player_id] = player_name
 			}
 
 			boardstate: string
@@ -201,12 +234,10 @@ main :: proc() {
 			context.allocator = mem.arena_allocator(&req_arena)
 
 
-			player_id := req.url_params[0]
-			if guard(&player_lock) {
-				p_len := len(players)
-				idx, exists := find(players.id[:p_len], player_id)
-
-				if !exists do append_soa_elem(&players, Player{id = player_id, choices = -1})
+			player_name := req.url_params[0]
+			player_id := hash(player_name)
+			if !(player_id in hash_map) {
+				hash_map[player_id] = player_name
 			}
 
 
@@ -236,7 +267,11 @@ main :: proc() {
 				mem.arena_init(&req_arena, req_buff[:])
 				context.allocator = mem.arena_allocator(&req_arena)
 
-				player_id := req.url_params[0]
+				player_name := req.url_params[0]
+				player_id := hash(player_name)
+				if !(player_id in hash_map) {
+					hash_map[player_id] = player_name
+				}
 				from := req.url_params[1]
 				to := req.url_params[2]
 				// TODO: implement replace
@@ -290,230 +325,174 @@ handle_flip :: proc(_: ^http.Handler, req: ^http.Request, res: ^http.Response) {
 	context.allocator = mem.arena_allocator(&req_arena)
 
 
-	player_id := req.url_params[0]
+	player_name := req.url_params[0]
+	player_id := hash(player_name)
+	if !(player_id in hash_map) {
+		hash_map[player_id] = player_name
+	}
 	loc_str, _ := str.split(req.url_params[1], ",")
 
-	location: [2]int
-	location[0] = atoi(loc_str[0])
-	location[1] = atoi(loc_str[1])
+	tile_pos: int = atoi(loc_str[0]) * board_w + atoi(loc_str[1])
 
 	in_wait_list: bool
 	loop: for {
-		pguard: if guard(&player_lock) {
+		write_guard: if guard_write(&board_lock) {
 
-			p_len := len(players)
-			idx, exists := find(players.id[:p_len], player_id)
+			inner_loop: for {
 
-			if !exists {
-				new_player := Player {
-					id      = player_id,
-					choices = -1,
-				}
+				player_poss := find_player_pos(player_id)
+				tile := &board[tile_pos]
+				switch {
 
-				append_soa_elem(&players, new_player)
+				// if has no cards
+				case player_poss[0] + player_poss[1] == 0:
+					// #1-a
+					if tile.card == NO_STRING {
+						// no card here
+						// operations fails and you do nothing
+						board_was_updated()
+						log.infof("%s has choses empty tile:%v as the first card", player_id, tile)
+						break loop
+					}
 
-				p_len = len(players)
-				idx, exists = find(players.id[:p_len], player_id)
-
-				assert(exists)
-
-			}
-
-			write_guard: if guard_write(&board_lock) {
-				inner_loop: for {
-
-					tile := &board[location[0]][location[1]]
-					switch {
-
-					case players[idx].choices[0] == -1:
-						// #1-a
-						if tile.card == "" {
-							// no card here
-							// operations fails and you do nothing
-							assert(len(tile.wait_list) == 0)
-							board_was_updated()
-							log.infof(
-								"%s has choses empty tile:%v as the first card",
-								player_id,
-								tile,
-							)
-							break loop
-						}
-
-						// #1-bc
-						if tile.owner == "" {
-							if in_wait_list {
-								assert(len(tile.wait_list) > 0)
-								if tile.wait_list[0] == player_id {
-									me := pop_front(&tile.wait_list)
-									delete(me, global_allocator)
-									in_wait_list = false
-								}
-
-								log.infof(
-									"%s has choses free tile:%v as the first card, and was in wait list",
-									player_id,
-									tile,
-								)
-							} else {
-
-								log.infof(
-									"%s has choses free tile:%v as the first card, and was not in wait list",
-									player_id,
-									tile,
-								)
+					// #1-bc
+					if tile.owner == NO_STRING {
+						if in_wait_list {
+							if tile.wait_list[0] == player_id {
+								pop_front(&board[tile_pos].wait_list)
+								in_wait_list = false
 							}
-							// free card
-							players[idx].choices = {location, -1}
-
-							tile.owner = str.clone(player_id, global_allocator)
-
-							board_was_updated()
-							break loop
-						}
-
-						if tile.owner == player_id {
-							internal_error(
-								res,
-								"there should be no cards owned by player if this is the first choice",
-								0,
-							)
-							return
-						}
-
-						// tile.owner != player_id != ""
-
-						// #1-d
-						if !in_wait_list {
-							in_wait_list = true
-							append_elem(&tile.wait_list, str.clone(player_id, global_allocator))
-							assert(len(tile.wait_list) <= len(players))
-							// the choice is not saved, as it's not allowed yet
-							// players[idx].choices = {location, -1}
-
 							log.infof(
-								"%s has choses an occupied tile:%v by %sas the first card, now is in wait list",
-								player_id,
-								tile,
-								tile.owner,
-							)
-						}
-						continue loop
-
-
-					case players[idx].choices[1] == -1:
-						// #2-a
-						if tile.card == "" {
-							// no card here
-
-							// relinquish controll of choices
-							old_choice := players[idx].choices[0]
-							players[idx].choices = -1
-
-							evacuate_tile(old_choice)
-							board_was_updated()
-
-
-							log.infof(
-								"%s chose empty tile %v as the second choice, dicard previous choice",
+								"%s has choses free tile:%v as the first card, and was in wait list",
 								player_id,
 								tile,
 							)
-
-							break loop
-						}
-
-						// #2-b
-						if tile.owner != "" {
-							old_choice := players[idx].choices[0]
-							players[idx].choices = -1
-
-							evacuate_tile(old_choice)
-							// i wasn't added to waitlist, i shouldn't touch it either
-
-							board_was_updated()
+						} else {
 							log.infof(
-								"%s chose an owned tile %v by %s as the second choice, dicard previous choice",
+								"%s has choses free tile:%v as the first card, and was not in wait list",
 								player_id,
 								tile,
-								tile.owner,
 							)
-
-							break loop
 						}
+						// free card
 
-						//if tile.owner == ""
-						// #2-cde
-						players[idx].choices[1] = location
-						prev_location := players[idx].choices[0]
+						board[tile_pos].owner = player_id
 
-						tile.owner = str.clone(player_id, global_allocator)
+						board_was_updated()
+						break loop
+					}
+
+					if tile.owner == player_id {
+						internal_error(
+							res,
+							"there should be no cards owned by player if this is the first choice",
+							0,
+						)
+						return
+					}
+
+					// tile.owner != player_id != ""
+
+					// #1-d
+					if !in_wait_list {
+						in_wait_list = true
+						place_back(&board[tile_pos].wait_list, player_id)
+						// the choice is not saved, as it's not allowed yet
+
+						log.infof(
+							"%s has choses an occupied tile:%v by %sas the first card, now is in wait list",
+							player_id,
+							tile,
+							tile.owner,
+						)
+					}
+					continue loop
+
+
+				// has already 1 tile occupied
+				case player_poss[0] * player_poss[1] == 0:
+					// #2-a
+					if tile.card == NO_STRING {
+						// no card here
+
+						// relinquish controll of choices
+						old_choice := player_poss[0] + player_poss[1]
+
+						// player pos starts from 1, 0 means empty
+						assert(old_choice != 0)
+
+						evacuate_tile(old_choice - 1)
 						board_was_updated()
 
 						log.infof(
-							"%s chose empty tile %v as the second choice, wait for 3rd",
+							"%s chose empty tile %v as the second choice, dicard previous choice",
 							player_id,
 							tile,
 						)
-
 						break loop
-					case:
-						old_choices := players[idx].choices
-						players[idx].choices = -1
+					}
 
-						evacuate_tile(old_choices[0])
-						evacuate_tile(old_choices[1])
+					// #2-b
+					if tile.owner != NO_STRING {
+						old_choice := player_poss[0] + player_poss[1]
+
+						// player pos starts from 1, 0 means empty
+						evacuate_tile(old_choice - 1)
+						// i wasn't added to waitlist, i shouldn't touch it either
 
 						board_was_updated()
+						log.infof(
+							"%s chose an owned tile %v by %s as the second choice, dicard previous choice",
+							player_id,
+							tile,
+							tile.owner,
+						)
 
-						tile1 := &board[old_choices[0][0]][old_choices[0][1]]
-						tile2 := &board[old_choices[1][0]][old_choices[1][1]]
-
-						// 3-a
-						// if they are the same 2 cards, free them
-						if tile1.card == tile2.card {
-
-							tile1.card, tile2.card = "", ""
-
-							delete(tile1.owner, global_allocator)
-							delete(tile2.owner, global_allocator)
-							tile1.owner, tile.owner = "", ""
-
-							clear_dynamic_array(&tile1.wait_list)
-							clear_dynamic_array(&tile2.wait_list)
-
-							fmt.assertf(
-								len(tile1.wait_list) == 0,
-								"tile1 doesnt check out:%v\nfor %s",
-								tile1,
-								player_id,
-							)
-							fmt.assertf(
-								len(tile2.wait_list) == 0,
-								"tile2 doesnt check out:%v\nfor %s",
-								tile2,
-								player_id,
-							)
-
-
-							assert(tile1.wait_list.allocator == global_allocator)
-							assert(tile2.wait_list.allocator == global_allocator)
-
-							board_was_updated()
-						} else {
-							evacuate_tile(old_choices[0])
-							evacuate_tile(old_choices[1])
-
-							board_was_updated()
-						}
-
-						// the previous 2 choices were handled
-						// now act as if that was the first choice
-						continue inner_loop
+						break loop
 					}
-				} // :inner_loop
-			} // :write_guard
-		} // :pguard
+
+					//if tile.owner == ""
+					// #2-cde
+
+					board[tile_pos].owner = player_id
+					board_was_updated()
+
+					log.infof(
+						"%s chose empty tile %v as the second choice, wait for 3rd",
+						player_id,
+						tile,
+					)
+
+					break loop
+				case:
+					// if both exist and are non0
+					tile1 := evacuate_tile(player_poss[0] - 1)
+					tile2 := evacuate_tile(player_poss[1] - 1)
+
+					board_was_updated()
+
+					// 3-a
+					// if they are the same 2 cards, free them
+					if tile1.card == tile2.card {
+						tp := player_poss - 1
+						board[tp[0]].card, board[tp[1]].card = NO_STRING, NO_STRING
+						board[tp[0]].owner, board[tp[1]].owner = NO_STRING, NO_STRING
+						board[tp[0]].wait_list = 0
+						board[tp[1]].wait_list = 0
+
+						board_was_updated()
+					} else {
+						evacuate_tile(player_poss[0] - 1)
+						evacuate_tile(player_poss[1] - 1)
+						board_was_updated()
+					}
+
+					// the previous 2 choices were handled
+					// now act as if that was the first choice
+					continue inner_loop
+				}
+			} // :inner_loop
+		} // :write_guard
 		time.sleep(1 * time.Millisecond)
 	} // :loop
 
