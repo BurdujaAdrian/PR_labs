@@ -8,6 +8,7 @@ import "core:hash/xxhash"
 import "core:log"
 import "core:mem"
 import "core:os"
+import "core:os/os2"
 import "core:slice"
 import "core:strconv"
 import str "core:strings"
@@ -29,14 +30,39 @@ find :: slice.linear_search
 
 //@helper generic
 unwrap :: #force_inline proc(something: $T, ok: $D, loc := #caller_location) -> T {
-	assert_contextless(ok)
+	assert_contextless(ok, loc = loc)
 	return something
 }
 
-atoi :: proc(num: string) -> int {
-	return unwrap(strconv.parse_int(num, 10))
+atoi :: #force_inline proc(num: string, loc := #caller_location) -> int {
+	return unwrap(strconv.parse_int(num, 10), loc)
 }
 
+hash :: #force_inline proc(text: string) -> (res: u64) {
+	res = xxhash.XXH3_64_default(transmute([]u8)text)
+	assert(res != NO_STRING)
+	return
+}
+
+pop_front :: #force_inline proc(list: ^[MAX_PLAYERS]u64) -> (front: u64) {
+	front = list[0]
+	#unroll for i in 0 ..< MAX_PLAYERS - 1 {
+		list[i] = list[i + 1]
+	}
+	return
+}
+
+place_back :: #force_inline proc(list: ^[MAX_PLAYERS]u64, p_id: u64) {
+	p_id := p_id
+	#unroll for i in 0 ..< MAX_PLAYERS - 1 {
+		if list[i] == 0 {
+			list[i] = p_id
+			p_id = 0
+		}
+	}
+	// has inserted succesfully
+	assert(p_id == 0)
+}
 
 //@server helpers
 internal_error :: proc(res: ^http.Response, msg: string, err: $E) {
@@ -44,12 +70,6 @@ internal_error :: proc(res: ^http.Response, msg: string, err: $E) {
 	http.headers_set(&res.headers, "Access-Control-Allow-Origin", "*")
 	http.body_set_str(res, fmt.aprint(msg, err))
 	http.respond_with_status(res, .Internal_Server_Error)
-}
-
-hash :: #force_inline proc(text: string) -> (res: u64) {
-	res = xxhash.XXH3_64_default(transmute([]u8)text)
-	assert(res != NO_STRING)
-	return
 }
 
 find_player_pos :: proc(player_id: u64) -> (res: [2]int) {
@@ -69,19 +89,14 @@ find_player_pos :: proc(player_id: u64) -> (res: [2]int) {
 	return
 }
 
-//@data types
-MAX_PLAYERS :: 10
-NO_STRING :: 0
-Tile :: struct {
-	card:      u64,
-	owner:     u64,
-	wait_list: [MAX_PLAYERS]u64,
-}
+evacuate_tile :: proc(pos: int) -> (old_tile: Tile) {
+	// if pos is <NONE>, do nothing
+	if pos == -1 do return
 
+	old_tile = board[pos]
+	board[pos].owner = pop_front(&board[pos].wait_list)
 
-GameErr :: enum {
-	THREE_CHOICES,
-	NO_SECOND_CHOICE,
+	return
 }
 
 gen_board :: proc(owner: u64, loc := #caller_location) -> string {
@@ -112,44 +127,25 @@ gen_board :: proc(owner: u64, loc := #caller_location) -> string {
 			write_str(&builder, "up ")
 			write_str(&builder, hash_map[tile.card])
 		}
-
 	}
-
 	return str.to_string(builder)
 }
 
-evacuate_tile :: proc(pos: int) -> (old_tile: Tile) {
-	// if pos is <NONE>, do nothing
-	if pos == -1 do return
-
-	old_tile = board[pos]
-	board[pos].owner = pop_front(&board[pos].wait_list)
-
-	return
-}
-
-pop_front :: #force_inline proc(list: ^[MAX_PLAYERS]u64) -> (front: u64) {
-	front = list[0]
-	#unroll for i in 0 ..< MAX_PLAYERS - 1 {
-		list[i] = list[i + 1]
+board_was_updated :: #force_inline proc() {
+	if guard(&update_lock) {
+		was_updated = true
+		sync.cond_broadcast(&update_watch)
 	}
-	return
 }
 
-place_back :: #force_inline proc(list: ^[MAX_PLAYERS]u64, p_id: u64) {
-	p_id := p_id
-	#unroll for i in 0 ..< MAX_PLAYERS - 1 {
-		if list[i] == 0 {
-			list[i] = p_id
-			p_id = 0
-		}
-	}
-	// has inserted succesfully
-	assert(p_id == 0)
+//@data types
+MAX_PLAYERS :: 10
+NO_STRING :: 0
+Tile :: struct {
+	card:      u64,
+	owner:     u64,
+	wait_list: [MAX_PLAYERS]u64,
 }
-
-// memory
-global_allocator: mem.Allocator
 
 // gamestate
 //	// board
@@ -163,28 +159,39 @@ update_watch: sync.Cond
 update_lock: sync.Mutex
 was_updated: bool
 
-board_was_updated :: #force_inline proc() {
-	if guard(&update_lock) {
-		was_updated = true
-		sync.cond_broadcast(&update_watch)
-	}
-}
-
 
 main :: proc() {
 
-	global_allocator = context.allocator // defaut heap allocator
+	args := os2.args
+	file: string
 
-	// TODO: initialize board by parsing a txt file
-	board_w = 4
-	board_h = 6
+	switch len(args) {
+	case 1:
+		fmt.panicf("In order to start the server, please provide a file as argument")
+	case:
+		file = args[1]
+	}
+
+	file_data, file_err := os2.read_entire_file_from_path(file, context.allocator)
+	if file_err != nil {
+		fmt.panicf("Failed to open and read file %v: %v", file, file_err)
+	}
+
+	file_lines, split_err := str.split_lines(str.trim_space(cast(string)file_data))
+	dimentions := str.split(file_lines[0], "x")
+	board_w = atoi(dimentions[0])
+	board_h = atoi(dimentions[1])
+
+	tile_lines := file_lines[1:]
+
 	board_size = board_h * board_w
+	assert(len(tile_lines) == board_size)
 	board = make_soa_slice(#soa[]Tile, board_size) // initialize board
 	for &tile, i in board {
-		tile.card = hash("Me") if i % 2 == 0 else hash("You")
+		txt_hash := hash(tile_lines[i])
+		tile.card = txt_hash
+		hash_map[txt_hash] = tile_lines[i]
 	}
-	hash_map[hash("Me")] = "Me"
-	hash_map[hash("You")] = "You"
 
 	/*
 	*	Lock hierarchy:
@@ -256,38 +263,41 @@ main :: proc() {
 		},
 	})
 
-	http.route_get(
-		&router,
-		"/replace/(.+)/(.+)/(.+)",
-		{
-			handle = proc(h: ^http.Handler, req: ^http.Request, res: ^http.Response) {
+	http.route_get(&router, "/replace/(.+)/(.+)/(.+)", {
+		handle = proc(h: ^http.Handler, req: ^http.Request, res: ^http.Response) {
 
-				req_arena: mem.Arena
-				req_buff: [4096]u8
-				mem.arena_init(&req_arena, req_buff[:])
-				context.allocator = mem.arena_allocator(&req_arena)
+			req_arena: mem.Arena
+			req_buff: [4096]u8
+			mem.arena_init(&req_arena, req_buff[:])
+			context.allocator = mem.arena_allocator(&req_arena)
 
-				player_name := req.url_params[0]
-				player_id := hash(player_name)
-				if !(player_id in hash_map) {
-					hash_map[player_id] = player_name
-				}
-				from := req.url_params[1]
-				to := req.url_params[2]
-				// TODO: implement replace
+			player_name := req.url_params[0]
+			player_id := hash(player_name)
+			if !(player_id in hash_map) {
+				hash_map[player_id] = player_name
+			}
 
-				board_was_updated()
+			from := req.url_params[1]
+			to := req.url_params[2]
+			from_hash := hash(from)
+			to_hash := hash(to)
+			hash_map[to_hash] = to
+
+			for &tile_card in board.card[:board_size] {
+				if tile_card == from_hash do tile_card = to_hash
+			}
+
+			board_was_updated()
 
 
-				boardstate: string
-				if guard_read(&board_lock) do boardstate = gen_board(player_id)
+			boardstate: string
+			if guard_read(&board_lock) do boardstate = gen_board(player_id)
 
 
-				http.headers_set(&res.headers, "Access-Control-Allow-Origin", "*")
-				http.respond_plain(res, boardstate)
-			},
+			http.headers_set(&res.headers, "Access-Control-Allow-Origin", "*")
+			http.respond_plain(res, boardstate)
 		},
-	)
+	})
 
 	http.route_get(&router, "/flip/(.+)/(.+)", {handle = handle_flip, next = &delay_handler})
 
