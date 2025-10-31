@@ -368,9 +368,9 @@ handle_flip :: proc(_: ^http.Handler, req: ^http.Request, res: ^http.Response) {
 						// #1-d
 						if !in_wait_list {
 							in_wait_list = true
-							append(&tile.wait_list, str.clone(player_id, global_allocator))
+							append_elem(&tile.wait_list, str.clone(player_id, global_allocator))
 							assert(len(tile.wait_list) <= len(players))
-							// the choice is not saved, at it's not allowed yet
+							// the choice is not saved, as it's not allowed yet
 							// players[idx].choices = {location, -1}
 						}
 						continue loop
@@ -388,11 +388,6 @@ handle_flip :: proc(_: ^http.Handler, req: ^http.Request, res: ^http.Response) {
 							evacuate_tile(old_choice)
 							board_was_updated()
 
-							// PERF: sanity check
-							when ODIN_DEBUG do if old_choice[1] != -1 {
-								internal_error(res, "second tile should not exist", 0)
-								return
-							}
 							break loop
 						}
 
@@ -452,12 +447,36 @@ handle_flip :: proc(_: ^http.Handler, req: ^http.Request, res: ^http.Response) {
 						// 3-a
 						// if they are the same 2 cards, free them
 						if tile1.card == tile2.card {
+							log.debug("tile1 before cleanup", tile1, player_id)
+							log.debug("tile2 before cleanup", tile2, player_id)
+
 							tile1.card, tile2.card = "", ""
+
 							delete(tile1.owner, global_allocator)
 							delete(tile2.owner, global_allocator)
 							tile1.owner, tile.owner = "", ""
-							delete(tile1.wait_list)
-							delete(tile2.wait_list)
+
+							clear_dynamic_array(&tile1.wait_list)
+							clear_dynamic_array(&tile2.wait_list)
+
+							fmt.assertf(
+								len(tile1.wait_list) == 0,
+								"tile1 doesnt check out:%v\nfor %s",
+								tile1,
+								player_id,
+							)
+							fmt.assertf(
+								len(tile2.wait_list) == 0,
+								"tile2 doesnt check out:%v\nfor %s",
+								tile2,
+								player_id,
+							)
+
+							log.debug("tile1 at was deleted:", tile1, player_id)
+							log.debug("tile2 at was deleted:", tile2, player_id)
+
+							assert(tile1.wait_list.allocator == global_allocator)
+							assert(tile2.wait_list.allocator == global_allocator)
 
 							board_was_updated()
 						} else {
