@@ -332,6 +332,11 @@ handle_flip :: proc(_: ^http.Handler, req: ^http.Request, res: ^http.Response) {
 							// operations fails and you do nothing
 							assert(len(tile.wait_list) == 0)
 							board_was_updated()
+							log.infof(
+								"%s has choses empty tile:%v as the first card",
+								player_id,
+								tile,
+							)
 							break loop
 						}
 
@@ -344,6 +349,19 @@ handle_flip :: proc(_: ^http.Handler, req: ^http.Request, res: ^http.Response) {
 									delete(me, global_allocator)
 									in_wait_list = false
 								}
+
+								log.infof(
+									"%s has choses free tile:%v as the first card, and was in wait list",
+									player_id,
+									tile,
+								)
+							} else {
+
+								log.infof(
+									"%s has choses free tile:%v as the first card, and was not in wait list",
+									player_id,
+									tile,
+								)
 							}
 							// free card
 							players[idx].choices = {location, -1}
@@ -372,6 +390,13 @@ handle_flip :: proc(_: ^http.Handler, req: ^http.Request, res: ^http.Response) {
 							assert(len(tile.wait_list) <= len(players))
 							// the choice is not saved, as it's not allowed yet
 							// players[idx].choices = {location, -1}
+
+							log.infof(
+								"%s has choses an occupied tile:%v by %sas the first card, now is in wait list",
+								player_id,
+								tile,
+								tile.owner,
+							)
 						}
 						continue loop
 
@@ -388,48 +413,48 @@ handle_flip :: proc(_: ^http.Handler, req: ^http.Request, res: ^http.Response) {
 							evacuate_tile(old_choice)
 							board_was_updated()
 
+
+							log.infof(
+								"%s chose empty tile %v as the second choice, dicard previous choice",
+								player_id,
+								tile,
+							)
+
 							break loop
 						}
 
 						// #2-b
 						if tile.owner != "" {
-							old_choice := players[idx].choices
+							old_choice := players[idx].choices[0]
 							players[idx].choices = -1
 
-							evacuate_tile(old_choice[0])
+							evacuate_tile(old_choice)
 							// i wasn't added to waitlist, i shouldn't touch it either
 
 							board_was_updated()
-							// PERF: sanity check
-							when ODIN_DEBUG do if old_choice[1] != -1 {
-								internal_error(res, "second tile should not exist", 0)
-								return
-							}
+							log.infof(
+								"%s chose an owned tile %v by %s as the second choice, dicard previous choice",
+								player_id,
+								tile,
+								tile.owner,
+							)
+
 							break loop
 						}
 
 						//if tile.owner == ""
-						// #2-e
+						// #2-cde
 						players[idx].choices[1] = location
 						prev_location := players[idx].choices[0]
 
-						tile1 := board[location[0]][location[1]]
-						tile2 := board[prev_location[0]][prev_location[1]]
-
-						// if tile1.card != tile2.card {
-						// 	evacuate_tile(location)
-						// 	evacuate_tile(prev_location)
-						//
-						// 	board_was_updated()
-						//
-						// 	// reset players choices
-						// 	players[idx].choices = -1
-						//
-						// 	break loop
-						// }
-						// #2-cd
 						tile.owner = str.clone(player_id, global_allocator)
 						board_was_updated()
+
+						log.infof(
+							"%s chose empty tile %v as the second choice, wait for 3rd",
+							player_id,
+							tile,
+						)
 
 						break loop
 					case:
@@ -447,8 +472,6 @@ handle_flip :: proc(_: ^http.Handler, req: ^http.Request, res: ^http.Response) {
 						// 3-a
 						// if they are the same 2 cards, free them
 						if tile1.card == tile2.card {
-							log.debug("tile1 before cleanup", tile1, player_id)
-							log.debug("tile2 before cleanup", tile2, player_id)
 
 							tile1.card, tile2.card = "", ""
 
@@ -472,8 +495,6 @@ handle_flip :: proc(_: ^http.Handler, req: ^http.Request, res: ^http.Response) {
 								player_id,
 							)
 
-							log.debug("tile1 at was deleted:", tile1, player_id)
-							log.debug("tile2 at was deleted:", tile2, player_id)
 
 							assert(tile1.wait_list.allocator == global_allocator)
 							assert(tile2.wait_list.allocator == global_allocator)
