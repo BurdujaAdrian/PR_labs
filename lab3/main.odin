@@ -95,9 +95,16 @@ evacuate_tile :: proc(pos: int) -> (old_tile: Tile) {
 	if pos == -1 do return
 
 	old_tile = board[pos]
-	board[pos].owner = pop_front(&board[pos].wait_list)
+	board[pos].owner = NO_STRING
 
 	return
+}
+
+move_waitlist :: proc(pos: int) {
+
+	if pos == -1 do return
+
+	board[pos].owner = pop_front(&board[pos].wait_list)
 }
 
 gen_board :: proc(owner: u64, loc := #caller_location) -> string {
@@ -108,25 +115,29 @@ gen_board :: proc(owner: u64, loc := #caller_location) -> string {
 	)
 	builder: str.Builder
 
-	write_int(&builder, board_h)
-	write_char(&builder, 'x')
-	write_int(&builder, board_w)
+	// unlikely to read the board in an invalid state. Also the board is a stabel
+	// and static piece of memory
+	if guard_read(&board_lock) {
+		write_int(&builder, board_h)
+		write_char(&builder, 'x')
+		write_int(&builder, board_w)
 
-	for tile in board {
-		write_str(&builder, "\n")
-		if tile.card == NO_STRING {
-			// card was taken
-			write_str(&builder, "none")
-		} else if tile.owner == owner {
-			// owner is trying to take it
-			write_str(&builder, "my ")
-			write_str(&builder, hash_map[tile.card])
-		} else if tile.owner == NO_STRING {
-			write_str(&builder, "down")
-		} else {
-			// there is an owner, just not you
-			write_str(&builder, "up ")
-			write_str(&builder, hash_map[tile.card])
+		for tile in board {
+			write_str(&builder, "\n")
+			if tile.card == NO_STRING {
+				// card was taken
+				write_str(&builder, "none")
+			} else if tile.owner == owner {
+				// owner is trying to take it
+				write_str(&builder, "my ")
+				write_str(&builder, hash_map[tile.card])
+			} else if tile.owner == NO_STRING {
+				write_str(&builder, "down")
+			} else {
+				// there is an owner, just not you
+				write_str(&builder, "up ")
+				write_str(&builder, hash_map[tile.card])
+			}
 		}
 	}
 	return str.to_string(builder)
@@ -204,36 +215,32 @@ main :: proc() {
 	http.router_init(&router)
 	defer http.router_destroy(&router)
 
-	delay_handler := http.Handler {
-		handle = proc(_: ^http.Handler, _: ^http.Request, _: ^http.Response) {
-			time.sleep(100 * time.Millisecond)
+
+	http.route_get(
+		&router,
+		"/look/(.+)",
+		{
+			handle = proc(h: ^http.Handler, req: ^http.Request, res: ^http.Response) {
+				req_arena: mem.Arena
+				req_buff: [4096]u8
+				mem.arena_init(&req_arena, req_buff[:])
+				context.allocator = mem.arena_allocator(&req_arena)
+
+
+				player_name := req.url_params[0]
+				player_id := hash(player_name)
+
+				boardstate: string
+				// if guard_read(&board_lock) {
+				boardstate = gen_board(player_id)
+				// }
+
+				http.headers_set(&res.headers, "Access-Control-Allow-Origin", "*")
+				http.respond_plain(res, boardstate)
+
+			},
 		},
-	}
-
-	http.route_get(&router, "/look/(.+)", {
-		handle = proc(h: ^http.Handler, req: ^http.Request, res: ^http.Response) {
-			req_arena: mem.Arena
-			req_buff: [4096]u8
-			mem.arena_init(&req_arena, req_buff[:])
-			context.allocator = mem.arena_allocator(&req_arena)
-
-
-			player_name := req.url_params[0]
-			player_id := hash(player_name)
-			if !(player_id in hash_map) {
-				hash_map[player_id] = player_name
-			}
-
-			boardstate: string
-			if guard_read(&board_lock) do boardstate = gen_board(player_id)
-
-
-			http.headers_set(&res.headers, "Access-Control-Allow-Origin", "*")
-			http.respond_plain(res, boardstate)
-
-		},
-		next = &delay_handler,
-	})
+	)
 	http.route_get(&router, "/watch/(.+)", {
 		handle = proc(h: ^http.Handler, req: ^http.Request, res: ^http.Response) {
 			req_arena: mem.Arena
@@ -244,9 +251,6 @@ main :: proc() {
 
 			player_name := req.url_params[0]
 			player_id := hash(player_name)
-			if !(player_id in hash_map) {
-				hash_map[player_id] = player_name
-			}
 
 
 			if guard(&update_lock) {
@@ -257,8 +261,7 @@ main :: proc() {
 			}
 
 
-			boardstate: string
-			if guard_read(&board_lock) do boardstate = gen_board(player_id)
+			boardstate := gen_board(player_id)
 			http.headers_set(&res.headers, "Access-Control-Allow-Origin", "*")
 			http.respond_plain(res, boardstate)
 		},
@@ -274,9 +277,6 @@ main :: proc() {
 
 			player_name := req.url_params[0]
 			player_id := hash(player_name)
-			if !(player_id in hash_map) {
-				hash_map[player_id] = player_name
-			}
 
 			from, from_ok := net.percent_decode(req.url_params[1])
 			to, to_ok := net.percent_decode(req.url_params[2])
@@ -292,8 +292,7 @@ main :: proc() {
 			board_was_updated()
 
 
-			boardstate: string
-			if guard_read(&board_lock) do boardstate = gen_board(player_id)
+			boardstate := gen_board(player_id)
 
 
 			http.headers_set(&res.headers, "Access-Control-Allow-Origin", "*")
@@ -301,7 +300,7 @@ main :: proc() {
 		},
 	})
 
-	http.route_get(&router, "/flip/(.+)/(.+)", {handle = handle_flip, next = &delay_handler})
+	http.route_get(&router, "/flip/(.+)/(.+)", {handle = handle_flip})
 
 	{ 	// `deploy` server
 		when ODIN_DEBUG {context.logger = log.create_console_logger(
@@ -316,7 +315,7 @@ main :: proc() {
 			handler,
 			http.Default_Endpoint,
 			http.Server_Opts {
-				thread_count = os.processor_core_count() / 2 - 1,
+				thread_count = os.processor_core_count(),
 				auto_expect_continue = true,
 				redirect_head_to_get = true,
 				limit_request_line = 8000,
@@ -326,9 +325,9 @@ main :: proc() {
 			fmt.eprintln("Listen and server Error:", err)
 		}
 	}
-
-
 }
+
+
 handle_flip :: proc(_: ^http.Handler, req: ^http.Request, res: ^http.Response) {
 
 	req_arena: mem.Arena
@@ -339,21 +338,43 @@ handle_flip :: proc(_: ^http.Handler, req: ^http.Request, res: ^http.Response) {
 
 	player_name := req.url_params[0]
 	player_id := hash(player_name)
-	if !(player_id in hash_map) {
-		hash_map[player_id] = player_name
-	}
+
 	loc_str, _ := str.split(req.url_params[1], ",")
 
 	tile_pos: int = atoi(loc_str[0]) * board_w + atoi(loc_str[1])
 
-	in_wait_list: bool
+	in_wait_list: bool = false
+	status: http.Status = .OK
+	capture_timestamp: time.Time
 	loop: for {
+
+		if in_wait_list {
+			log.debugf("%s is in waitlist,chill a little", player_name)
+			time.sleep(10 * time.Millisecond)
+		}
+
 		write_guard: if guard_write(&board_lock) {
 
 			inner_loop: for {
+				if in_wait_list {
+					now := time.now()
+					now_seconds := time.time_to_unix(now)
+					cap_seconds := time.time_to_unix(capture_timestamp)
+					if (now_seconds - cap_seconds) > 10 {
+						// if someone hords a tile for over a 5 seconds
+						move_waitlist(tile_pos)
+						log.debugf(
+							"%s has evivted player for staying too long %v > %v",
+							player_name,
+							now_seconds,
+							cap_seconds,
+						)
+					}
+				}
 
 				player_poss := find_player_pos(player_id)
 				tile := &board[tile_pos]
+
 				switch {
 
 				// if has no cards
@@ -362,21 +383,26 @@ handle_flip :: proc(_: ^http.Handler, req: ^http.Request, res: ^http.Response) {
 					if tile.card == NO_STRING {
 						// no card here
 						// operations fails and you do nothing
+						log.debugf("%s has chosen empty tile", player_name)
+						status = .Conflict
 						board_was_updated()
 						break loop
 					}
 
 					// #1-bc
 					if tile.owner == NO_STRING {
-						if in_wait_list {
-							if tile.wait_list[0] == player_id {
-								pop_front(&board[tile_pos].wait_list)
-								in_wait_list = false
-							}
-						}
+						// there should be no situation where there is no owner but there is an waitlist
+						assert(tile.wait_list == 0)
+						// if in_wait_list {
+						// 	if tile.wait_list[0] == player_id {
+						// 		pop_front(&board[tile_pos].wait_list)
+						// 		in_wait_list = false
+						// 	}
+						// }
 						// free card
 
 						board[tile_pos].owner = player_id
+						log.debugf("%s choose free tile", player_name)
 
 						board_was_updated()
 						break loop
@@ -396,7 +422,9 @@ handle_flip :: proc(_: ^http.Handler, req: ^http.Request, res: ^http.Response) {
 					// #1-d
 					if !in_wait_list {
 						in_wait_list = true
+						capture_timestamp = time.now()
 						place_back(&board[tile_pos].wait_list, player_id)
+						log.debugf("tile occupied, %s was added to waitlist ", player_name)
 						// the choice is not saved, as it's not allowed yet
 					}
 					continue loop
@@ -415,65 +443,86 @@ handle_flip :: proc(_: ^http.Handler, req: ^http.Request, res: ^http.Response) {
 						assert(old_choice != 0)
 
 						evacuate_tile(old_choice - 1)
+						status = .Conflict
 						board_was_updated()
+
+						log.debugf("%s has chosen empty tile as second choice", player_name)
 
 						break loop
 					}
 
 					// #2-b
 					if tile.owner != NO_STRING {
-						old_choice := player_poss[0] + player_poss[1]
+						if !in_wait_list {
+							old_choice := player_poss[0] + player_poss[1]
 
-						// player pos starts from 1, 0 means empty
-						evacuate_tile(old_choice - 1)
-						// i wasn't added to waitlist, i shouldn't touch it either
+							// player pos starts from 1, 0 means empty
+							// no evacuation, no adding yourself to the waitlist,
+							// you have to cycle the waitlist
+							move_waitlist(old_choice - 1)
+							status = .Conflict
 
-						board_was_updated()
+							log.debugf("%s has chosen owned tile as second choice", player_name)
+							board_was_updated()
 
-						break loop
+							break loop
+						}
+
+						if tile.owner == player_id {
+							log.debugf(
+								"%s has regained controll after being on the wait list",
+								player_name,
+							)
+							// they now rightfully controlls this tile
+							break loop
+						}
+						// else, not your tile, remain in the wait list
+						continue loop
+
 					}
 
 					//if tile.owner == ""
 					// #2-cde
 					board[tile_pos].owner = player_id
+					log.debugf("%s choose free tile as second tile", player_name)
 					board_was_updated()
 
 					break loop
 				case:
-					// if both exist and are non0
-					tile1 := evacuate_tile(player_poss[0] - 1)
-					tile2 := evacuate_tile(player_poss[1] - 1)
-
-					board_was_updated()
+					// you should never be in waitlist as the second choice
+					assert(!in_wait_list)
+					// if both exist and are non 0
+					tp := player_poss - 1
+					tile1 := board[tp[0]]
+					tile2 := board[tp[1]]
 
 					// 3-a
-					// if they are the same 2 cards, free them
+					// if they are the same 2 cards, emopty them
 					if tile1.card == tile2.card {
-						tp := player_poss - 1
+						//tile was already evacuated
 						board[tp[0]].card, board[tp[1]].card = NO_STRING, NO_STRING
-						board[tp[0]].owner, board[tp[1]].owner = NO_STRING, NO_STRING
+						evacuate_tile(tp[0])
+						evacuate_tile(tp[1])
 						board[tp[0]].wait_list = 0
 						board[tp[1]].wait_list = 0
 
-						board_was_updated()
-					} else {
-						evacuate_tile(player_poss[0] - 1)
-						evacuate_tile(player_poss[1] - 1)
-						board_was_updated()
+					} else { 	// free them up
+						move_waitlist(tp[0])
+						move_waitlist(tp[1])
+						status = .Conflict
 					}
 
+					board_was_updated()
 					// the previous 2 choices were handled
 					// now act as if that was the first choice
 					continue inner_loop
 				}
 			} // :inner_loop
 		} // :write_guard
-		time.sleep(1 * time.Millisecond)
 	} // :loop
 
-	boardstate: string
-	if guard_read(&board_lock) do boardstate = gen_board(player_id)
+	boardstate := gen_board(player_id)
 
 	http.headers_set(&res.headers, "Access-Control-Allow-Origin", "*")
-	http.respond_plain(res, boardstate)
+	http.respond_plain(res, boardstate, status = status)
 }
