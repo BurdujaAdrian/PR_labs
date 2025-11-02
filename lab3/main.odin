@@ -355,169 +355,160 @@ handle_flip :: proc(_: ^http.Handler, req: ^http.Request, res: ^http.Response) {
 
 		write_guard: if guard_write(&board_lock) {
 
-			inner_loop: for {
-				// if in_wait_list {
-				// 	now := time.now()
-				// 	now_seconds := time.time_to_unix(now)
-				// 	cap_seconds := time.time_to_unix(capture_timestamp)
-				// 	if (now_seconds - cap_seconds) > 10 {
-				// 		// if someone hords a tile for over a 5 seconds
-				// 		move_waitlist(tile_pos)
-				// 		log.debugf(
-				// 			"%s has evivted player for staying too long %v > %v",
-				// 			player_name,
-				// 			now_seconds,
-				// 			cap_seconds,
-				// 		)
-				// 	}
-				// }
+			// if in_wait_list {
+			// 	now := time.now()
+			// 	now_seconds := time.time_to_unix(now)
+			// 	cap_seconds := time.time_to_unix(capture_timestamp)
+			// 	if (now_seconds - cap_seconds) > 10 {
+			// 		// if someone hords a tile for over a 5 seconds
+			// 		move_waitlist(tile_pos)
+			// 		log.debugf(
+			// 			"%s has evivted player for staying too long %v > %v",
+			// 			player_name,
+			// 			now_seconds,
+			// 			cap_seconds,
+			// 		)
+			// 	}
+			// }
 
-				player_poss := find_player_pos(player_id)
-				tile := &board[tile_pos]
+			player_poss := find_player_pos(player_id)
+			tile := &board[tile_pos]
 
-				switch {
+			switch {
 
-				// if has no cards
-				case player_poss[0] + player_poss[1] == 0:
-					// #1-a
-					if tile.card == NO_STRING {
-						// no card here
-						// operations fails and you do nothing
-						log.debugf("%s has chosen empty tile", player_name)
+			case player_poss[0] != 0 && player_poss[1] != 0:
+				// you should never be in waitlist as the second choice
+				assert(!in_wait_list)
+				// if both exist and are non 0
+				tp := player_poss - 1
+				tile1 := board[tp[0]]
+				tile2 := board[tp[1]]
+
+				// 3-a
+				// if they are the same 2 cards, emopty them
+				if tile1.card == tile2.card {
+					//tile was already evacuated
+					board[tp[0]].card, board[tp[1]].card = NO_STRING, NO_STRING
+					evacuate_tile(tp[0])
+					evacuate_tile(tp[1])
+					board[tp[0]].wait_list = 0
+					board[tp[1]].wait_list = 0
+
+				} else { 	// free them up
+					move_waitlist(tp[0])
+					move_waitlist(tp[1])
+					status = .Conflict
+				}
+
+				board_was_updated()
+				// the previous 2 choices were handled
+				// now act as if that was the first choice
+				fallthrough
+			// if has no cards
+			case player_poss[0] + player_poss[1] == 0:
+				// #1-a
+				if tile.card == NO_STRING {
+					// no card here
+					// operations fails and you do nothing
+					log.debugf("%s has chosen empty tile", player_name)
+					status = .Conflict
+					board_was_updated()
+					break loop
+				}
+
+				// #1-bc
+				if tile.owner == NO_STRING {
+					// there should be no situation where there is no owner but there is an waitlist
+					assert(tile.wait_list == 0)
+
+					board[tile_pos].owner = player_id
+					log.debugf("%s choose free tile", player_name)
+
+					board_was_updated()
+					break loop
+				}
+
+				if tile.owner == player_id {
+					internal_error(
+						res,
+						"there should be no cards owned by player if this is the first choice",
+						0,
+					)
+					return
+				}
+
+				// tile.owner != player_id != ""
+
+				// #1-d
+				if !in_wait_list {
+					in_wait_list = true
+					// capture_timestamp = time.now()
+					place_back(&board[tile_pos].wait_list, player_id)
+					log.debugf("tile occupied, %s was added to waitlist ", player_name)
+					// the choice is not saved, as it's not allowed yet
+				}
+				continue loop
+
+
+			// has already 1 tile occupied
+			case player_poss[0] * player_poss[1] == 0:
+				// #2-a
+				if tile.card == NO_STRING {
+					// no card here
+
+					// relinquish controll of choices
+					old_choice := player_poss[0] + player_poss[1]
+
+					// player pos starts from 1, 0 means empty
+					assert(old_choice != 0)
+
+					evacuate_tile(old_choice - 1)
+					status = .Conflict
+					board_was_updated()
+
+					log.debugf("%s has chosen empty tile as second choice", player_name)
+
+					break loop
+				}
+
+				// #2-b
+				if tile.owner != NO_STRING {
+					if !in_wait_list {
+						old_choice := player_poss[0] + player_poss[1]
+
+						// player pos starts from 1, 0 means empty
+						// no evacuation, no adding yourself to the waitlist,
+						// you have to cycle the waitlist
+						move_waitlist(old_choice - 1)
 						status = .Conflict
+
+						log.debugf("%s has chosen owned tile as second choice", player_name)
 						board_was_updated()
-						break loop
-					}
 
-					// #1-bc
-					if tile.owner == NO_STRING {
-						// there should be no situation where there is no owner but there is an waitlist
-						assert(tile.wait_list == 0)
-						// if in_wait_list {
-						// 	if tile.wait_list[0] == player_id {
-						// 		pop_front(&board[tile_pos].wait_list)
-						// 		in_wait_list = false
-						// 	}
-						// }
-						// free card
-
-						board[tile_pos].owner = player_id
-						log.debugf("%s choose free tile", player_name)
-
-						board_was_updated()
 						break loop
 					}
 
 					if tile.owner == player_id {
-						internal_error(
-							res,
-							"there should be no cards owned by player if this is the first choice",
-							0,
+						log.debugf(
+							"%s has regained controll after being on the wait list",
+							player_name,
 						)
-						return
-					}
-
-					// tile.owner != player_id != ""
-
-					// #1-d
-					if !in_wait_list {
-						in_wait_list = true
-						// capture_timestamp = time.now()
-						place_back(&board[tile_pos].wait_list, player_id)
-						log.debugf("tile occupied, %s was added to waitlist ", player_name)
-						// the choice is not saved, as it's not allowed yet
-					}
-					continue loop
-
-
-				// has already 1 tile occupied
-				case player_poss[0] * player_poss[1] == 0:
-					// #2-a
-					if tile.card == NO_STRING {
-						// no card here
-
-						// relinquish controll of choices
-						old_choice := player_poss[0] + player_poss[1]
-
-						// player pos starts from 1, 0 means empty
-						assert(old_choice != 0)
-
-						evacuate_tile(old_choice - 1)
-						status = .Conflict
-						board_was_updated()
-
-						log.debugf("%s has chosen empty tile as second choice", player_name)
-
+						// they now rightfully controlls this tile
 						break loop
 					}
+					// else, not your tile, remain in the wait list
+					continue loop
 
-					// #2-b
-					if tile.owner != NO_STRING {
-						if !in_wait_list {
-							old_choice := player_poss[0] + player_poss[1]
-
-							// player pos starts from 1, 0 means empty
-							// no evacuation, no adding yourself to the waitlist,
-							// you have to cycle the waitlist
-							move_waitlist(old_choice - 1)
-							status = .Conflict
-
-							log.debugf("%s has chosen owned tile as second choice", player_name)
-							board_was_updated()
-
-							break loop
-						}
-
-						if tile.owner == player_id {
-							log.debugf(
-								"%s has regained controll after being on the wait list",
-								player_name,
-							)
-							// they now rightfully controlls this tile
-							break loop
-						}
-						// else, not your tile, remain in the wait list
-						continue loop
-
-					}
-
-					//if tile.owner == ""
-					// #2-cde
-					board[tile_pos].owner = player_id
-					log.debugf("%s choose free tile as second tile", player_name)
-					board_was_updated()
-
-					break loop
-				case:
-					// you should never be in waitlist as the second choice
-					assert(!in_wait_list)
-					// if both exist and are non 0
-					tp := player_poss - 1
-					tile1 := board[tp[0]]
-					tile2 := board[tp[1]]
-
-					// 3-a
-					// if they are the same 2 cards, emopty them
-					if tile1.card == tile2.card {
-						//tile was already evacuated
-						board[tp[0]].card, board[tp[1]].card = NO_STRING, NO_STRING
-						evacuate_tile(tp[0])
-						evacuate_tile(tp[1])
-						board[tp[0]].wait_list = 0
-						board[tp[1]].wait_list = 0
-
-					} else { 	// free them up
-						move_waitlist(tp[0])
-						move_waitlist(tp[1])
-						status = .Conflict
-					}
-
-					board_was_updated()
-					// the previous 2 choices were handled
-					// now act as if that was the first choice
-					continue inner_loop
 				}
-			} // :inner_loop
+
+				//if tile.owner == ""
+				// #2-cde
+				board[tile_pos].owner = player_id
+				log.debugf("%s choose free tile as second tile", player_name)
+				board_was_updated()
+
+				break loop
+			}
 		} // :write_guard
 	} // :loop
 
