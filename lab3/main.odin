@@ -345,7 +345,7 @@ handle_flip :: proc(_: ^http.Handler, req: ^http.Request, res: ^http.Response) {
 
 	in_wait_list: bool = false
 	status: http.Status = .OK
-	capture_timestamp: time.Time
+	// capture_timestamp: time.Time
 	loop: for {
 
 		if in_wait_list {
@@ -356,21 +356,21 @@ handle_flip :: proc(_: ^http.Handler, req: ^http.Request, res: ^http.Response) {
 		write_guard: if guard_write(&board_lock) {
 
 			inner_loop: for {
-				if in_wait_list {
-					now := time.now()
-					now_seconds := time.time_to_unix(now)
-					cap_seconds := time.time_to_unix(capture_timestamp)
-					if (now_seconds - cap_seconds) > 10 {
-						// if someone hords a tile for over a 5 seconds
-						move_waitlist(tile_pos)
-						log.debugf(
-							"%s has evivted player for staying too long %v > %v",
-							player_name,
-							now_seconds,
-							cap_seconds,
-						)
-					}
-				}
+				// if in_wait_list {
+				// 	now := time.now()
+				// 	now_seconds := time.time_to_unix(now)
+				// 	cap_seconds := time.time_to_unix(capture_timestamp)
+				// 	if (now_seconds - cap_seconds) > 10 {
+				// 		// if someone hords a tile for over a 5 seconds
+				// 		move_waitlist(tile_pos)
+				// 		log.debugf(
+				// 			"%s has evivted player for staying too long %v > %v",
+				// 			player_name,
+				// 			now_seconds,
+				// 			cap_seconds,
+				// 		)
+				// 	}
+				// }
 
 				player_poss := find_player_pos(player_id)
 				tile := &board[tile_pos]
@@ -422,7 +422,7 @@ handle_flip :: proc(_: ^http.Handler, req: ^http.Request, res: ^http.Response) {
 					// #1-d
 					if !in_wait_list {
 						in_wait_list = true
-						capture_timestamp = time.now()
+						// capture_timestamp = time.now()
 						place_back(&board[tile_pos].wait_list, player_id)
 						log.debugf("tile occupied, %s was added to waitlist ", player_name)
 						// the choice is not saved, as it's not allowed yet
