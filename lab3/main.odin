@@ -88,21 +88,13 @@ find_player_pos :: proc(player_id: u64) -> (res: [2]int) {
 	return
 }
 
-evacuate_tile :: proc(pos: int) -> (old_tile: Tile) {
-	// if pos is <NONE>, do nothing
-	if pos == -1 do return
 
-	old_tile = board[pos]
-	board[pos].owner = NO_STRING
-
-	return
-}
-
-move_waitlist :: proc(pos: int) {
+evacuate_tile :: proc(pos: int) {
 
 	if pos == -1 do return
 
 	board[pos].owner = pop_front(&board[pos].wait_list)
+	sync.cond_broadcast(&board[pos].watch)
 }
 
 gen_board :: proc(owner: u64, loc := #caller_location) -> string {
@@ -115,7 +107,7 @@ gen_board :: proc(owner: u64, loc := #caller_location) -> string {
 
 	// unlikely to read the board in an invalid state. Also the board is a stabel
 	// and static piece of memory
-	if guard(&board_lock) {
+	if true  /* guard(&board_lock)*/{
 		write_int(&builder, board_h)
 		write_char(&builder, 'x')
 		write_int(&builder, board_w)
@@ -358,19 +350,16 @@ handle_flip :: proc(_: ^http.Handler, req: ^http.Request, res: ^http.Response) {
 			tile2 := board[tp[1]]
 
 			// 3-a
-			// if they are the same 2 cards, emopty them
+			// if they are the same 2 cards, empty them
 			if tile1.card == tile2.card {
 				board[tp[0]].card, board[tp[1]].card = NO_STRING, NO_STRING
-				evacuate_tile(tp[0])
-				evacuate_tile(tp[1])
 				board[tp[0]].wait_list = 0
 				board[tp[1]].wait_list = 0
-
 			} else { 	// free them up
-				move_waitlist(tp[0])
-				move_waitlist(tp[1])
 				status = .Conflict
 			}
+			evacuate_tile(tp[0])
+			evacuate_tile(tp[1])
 
 			board_was_updated()
 			// the previous 2 choices were handled
@@ -389,29 +378,28 @@ handle_flip :: proc(_: ^http.Handler, req: ^http.Request, res: ^http.Response) {
 			}
 
 			// #1-bc
-			if tile.owner == NO_STRING {
-				// there should be no situation where there is no owner but there is an waitlist
-				assert(tile.wait_list == 0)
-
-				board[tile_pos].owner = player_id
-				log.debugf("%s choose free tile", player_name)
-
-				board_was_updated()
-				break write_guard
-			}
-
-			// tile.owner != player_id != ""
 			if tile.owner != player_id {
-				status = .Conflict
-				break write_guard
+				if tile.owner != NO_STRING {
+					place_back(&tile.wait_list, player_id)
+					// while tile is not evacuated to player_id or it still exists
+					for tile.owner != player_id && tile.card != NO_STRING {
+						sync.cond_wait(&tile.watch, &board_lock)
+					}
+					if tile.card != NO_STRING {
+						status = .Conflict
+					}
+					break write_guard
+				} else {
+					// there should be no situation where there is no owner but there is an waitlist
+					assert(tile.wait_list == 0)
+
+					board[tile_pos].owner = player_id
+					log.debugf("%s choose free tile", player_name)
+
+					board_was_updated()
+					break write_guard
+				}
 			}
-			// if tile.owner != player_id {
-			// 	if guard(&tile.lock) do for tile.owner == NO_STRING {
-			// 		sync.cond_wait(&tile.watch, &tile.lock)
-			// 	}
-			//
-			// 	// continue to the rest of the code
-			// }
 
 
 			if tile.owner == player_id {
@@ -452,7 +440,7 @@ handle_flip :: proc(_: ^http.Handler, req: ^http.Request, res: ^http.Response) {
 				// player pos starts from 1, 0 means empty
 				// no evacuation, no adding yourself to the waitlist,
 				// you have to cycle the waitlist
-				move_waitlist(old_choice - 1)
+				evacuate_tile(old_choice - 1)
 				status = .Conflict
 
 				log.debugf("%s has chosen owned tile as second choice", player_name)
