@@ -87,7 +87,7 @@ main :: proc() {
 
 	tile_lines := file_lines[1:]
 
-	_board_size = _board_h * _board_w
+	_board_size := _board_h * _board_w
 	assert(len(tile_lines) == _board_size)
 	_board = make_soa_slice(#soa[]Tile, _board_size) // initialize board
 	for &tile, i in _board {
@@ -105,7 +105,6 @@ main :: proc() {
 		_board,
 		_board_w,
 		_board_h,
-		_board_size,
 		_board_lock,
 		_hash_map,
 		_update_watch,
@@ -183,7 +182,36 @@ main :: proc() {
 		},
 	})
 
-	http.route_get(&router, "/flip/(.+)/(.+)", {user_data = &e, handle = handle_flip})
+	http.route_get(&router, "/flip/(.+)/(.+)", {
+		user_data = &e,
+		handle = proc(h: ^http.Handler, req: ^http.Request, res: ^http.Response) {
+
+			e := cast(^Effect)h.user_data
+
+			req_arena: mem.Arena
+			req_buff: [4096]u8
+			mem.arena_init(&req_arena, req_buff[:])
+			context.allocator = mem.arena_allocator(&req_arena)
+
+
+			player_name := req.url_params[0]
+			player_id := hash(player_name)
+
+			loc_str, _ := str.split(req.url_params[1], ",")
+			tile_pos: int = atoi(loc_str[0]) * e.board_w + atoi(loc_str[1])
+
+			status: http.Status = .OK
+
+			boardstate, err := flip(player_id, tile_pos, e)
+
+			if err != nil {
+				status = .Conflict
+			}
+
+			http.headers_set(&res.headers, "Access-Control-Allow-Origin", "*")
+			http.respond_plain(res, boardstate, status = status)
+		},
+	})
 
 	{ 	// `deploy` server
 		when ODIN_DEBUG {context.logger = log.create_console_logger(
@@ -208,41 +236,4 @@ main :: proc() {
 			fmt.eprintln("Listen and server Error:", err)
 		}
 	}
-}
-
-
-handle_flip :: proc(h: ^http.Handler, req: ^http.Request, res: ^http.Response) {
-
-	e := cast(^Effect)h.user_data
-
-	req_arena: mem.Arena
-	req_buff: [4096]u8
-	mem.arena_init(&req_arena, req_buff[:])
-	context.allocator = mem.arena_allocator(&req_arena)
-
-
-	player_name := req.url_params[0]
-	player_id := hash(player_name)
-
-	loc_str, _ := str.split(req.url_params[1], ",")
-	tile_pos: int = atoi(loc_str[0]) * e.board_w + atoi(loc_str[1])
-
-	status: http.Status = .OK
-
-	boardstate, err := flip(player_id, tile_pos, e)
-
-	if err != nil {
-		switch err {
-		case .Conflict:
-			status = .Conflict
-		case .INTERNAL:
-			{
-				internal_error(res, boardstate, 0)
-				return
-			}
-		}
-	}
-
-	http.headers_set(&res.headers, "Access-Control-Allow-Origin", "*")
-	http.respond_plain(res, boardstate, status = status)
 }

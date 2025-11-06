@@ -28,8 +28,8 @@ internal_error :: proc(res: ^http.Response, msg: string, err: $E) {
 }
 
 Game_err :: enum {
+	Ok,
 	Conflict,
-	INTERNAL,
 }
 
 flip :: proc(player_id: u64, tile_pos: int, e: ^Effect) -> (boardstate: string, err: Game_err) {
@@ -41,124 +41,35 @@ flip :: proc(player_id: u64, tile_pos: int, e: ^Effect) -> (boardstate: string, 
 
 		switch {
 
+		// if both exist and are non 0
 		case player_poss[0] != 0 && player_poss[1] != 0:
-			// if both exist and are non 0
-			tp := player_poss - 1
-			tile1 := e.board[tp[0]]
-			tile2 := e.board[tp[1]]
-
 			// 3-a
 			// if they are the same 2 cards, empty them
-			if tile1.card == tile2.card {
-				e.board[tp[0]].card, e.board[tp[1]].card = NO_STRING, NO_STRING
-				e.board[tp[0]].wait_list = 0
-				e.board[tp[1]].wait_list = 0
-			} else { 	// free them up
-				err = .Conflict
-			}
-			evacuate_tile(tp[0], e)
-			evacuate_tile(tp[1], e)
-
-			board_was_updated(e)
+			err = handle_2prev_choices(player_poss, e)
 			// the previous 2 choices were handled
 			// now act as if that was the first choice
 			fallthrough
 		// if has no cards
 		case player_poss[0] + player_poss[1] == 0:
-			// #1-a
-			if tile.card == NO_STRING {
-				// no card here
-				// operations fails and you do nothing
-				err = .Conflict
-				board_was_updated(e)
-				break write_guard
-			}
-
-			// #1-bc
-			if tile.owner != player_id {
-				if tile.owner != NO_STRING {
-					place_back(&tile.wait_list, player_id)
-					// while tile is not evacuated to player_id or it still exists
-					for tile.owner != player_id && tile.card != NO_STRING {
-						sync.cond_wait(&tile.watch, &e.board_lock)
-					}
-					if tile.card != NO_STRING {
-						err = .Conflict
-					}
-					break write_guard
-				} else {
-					// there should be no situation where there is no owner but there is an waitlist
-					assert(tile.wait_list == 0)
-
-					e.board[tile_pos].owner = player_id
-
-					board_was_updated(e)
-					break write_guard
-				}
-			}
-
-
-			if tile.owner == player_id {
-				return "there should be no cards owned by player if this is the first choice",
-					.INTERNAL
-			}
-
+			// rule #1-abc, blocking
+			err = handle_no_prev_choices(player_id, tile_pos, e)
 
 		// has already 1 tile occupied
 		case player_poss[0] * player_poss[1] == 0:
-			// #2-a
-			if tile.card == NO_STRING {
-				// no card here
-
-				// relinquish controll of choices
-				old_choice := player_poss[0] + player_poss[1]
-
-				// player pos starts from 1, 0 means empty
-				assert(old_choice != 0)
-
-				evacuate_tile(old_choice - 1, e)
-				err = .Conflict
-				board_was_updated(e)
-
-				break write_guard
-			}
-
-			// #2-b
-			if tile.owner != NO_STRING {
-				old_choice := player_poss[0] + player_poss[1]
-
-				// player pos starts from 1, 0 means empty
-				// no evacuation, no adding yourself to the waitlist,
-				// you have to cycle the waitlist
-				evacuate_tile(old_choice - 1, e)
-				err = .Conflict
-
-				board_was_updated(e)
-
-				break write_guard
-			}
-
-			// #2-cde
-			//if tile.owner == NO_STRING
-			e.board[tile_pos].owner = player_id
-			board_was_updated(e)
+			// rule #2-abcde
+			err = handle_one_prev_choice(player_id, player_poss, tile_pos, e)
 		}
 	} // :write_guard
 
-	return look(player_id, e), nil
+	return look(player_id, e), .Ok
 }
 
 
 replace :: proc(to, from: string, player_id: u64, e: ^Effect) -> string {
 
 	from_hash := hash(from)
-	to_hash := hash(to)
-	e.hash_map[to_hash] = str.clone(to, e.hash_map.allocator)
+	e.hash_map[from_hash] = str.clone(to, e.hash_map.allocator)
 
-	for &tile_card, i in e.board.card[:e.board_size] {
-		_tile := e.board[i]
-		if tile_card == from_hash do tile_card = to_hash
-	}
 	board_was_updated(e)
 
 	return look(player_id, e)
@@ -175,10 +86,10 @@ watch :: proc(player_id: u64, e: ^Effect) -> string {
 	return look(player_id, e)
 }
 
-look :: proc(owner: u64, e: ^Effect, loc := #caller_location) -> string {
+look :: proc(player_id: u64, e: ^Effect, loc := #caller_location) -> string {
 	fmt.assertf(
-		owner != NO_STRING,
-		"the owner when calling gen board should not be \"\"",
+		player_id != NO_STRING,
+		"the player_id when calling look board should not be \"\"",
 		loc = loc,
 	)
 	builder: str.Builder
@@ -195,7 +106,7 @@ look :: proc(owner: u64, e: ^Effect, loc := #caller_location) -> string {
 			if tile.card == NO_STRING {
 				// card was taken
 				write_str(&builder, "none")
-			} else if tile.owner == owner {
+			} else if tile.owner == player_id {
 				// owner is trying to take it
 				write_str(&builder, "my ")
 				write_str(&builder, e.hash_map[tile.card])
