@@ -146,7 +146,6 @@ NO_STRING :: 0
 Tile :: struct {
 	card:      u64,
 	owner:     u64,
-	lock:      sync.Mutex,
 	watch:     sync.Cond,
 	wait_list: [MAX_PLAYERS]u64,
 }
