@@ -88,7 +88,11 @@ handle_no_prev_choices :: proc(player_id: u64, tile_pos: int, e: ^Effect) -> (er
 			place_back(&e.board[tile_pos].wait_list, player_id)
 			// while tile is not evacuated to player_id or it still exists
 			for e.board[tile_pos].owner != player_id && e.board[tile_pos].card != NO_STRING {
-				fmt.println("Waiting on cond: ", e.board[tile_pos].owner)
+				fmt.println(
+					"Waiting on cond/ for the tile %v to be freed: ",
+					e.board[tile_pos].owner,
+					tile_pos + 1,
+				)
 				sync.cond_wait(&e.board[tile_pos].watch, &e.board_lock)
 			}
 			if e.board[tile_pos].card == NO_STRING {
