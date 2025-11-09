@@ -1,8 +1,6 @@
 #+feature global-context
 package main
 
-import "base:builtin"
-import "base:runtime"
 import "core:fmt"
 import "core:hash/xxhash"
 import "core:log"
@@ -14,18 +12,8 @@ import "core:slice"
 import "core:strconv"
 import str "core:strings"
 import "core:sync"
-import "core:thread"
-import "core:time"
 import http "odin-http"
 
-write_str :: str.write_string
-write_int :: str.write_int
-write_char :: str.write_rune
-
-guard :: sync.mutex_guard
-
-map_f :: slice.mapper
-find :: slice.linear_search
 
 //@helper generic
 unwrap :: #force_inline proc(something: $T, ok: $D, loc := #caller_location) -> T {
@@ -43,28 +31,8 @@ hash :: #force_inline proc(text: string) -> (res: u64) {
 	return
 }
 
-pop_front :: #force_inline proc(list: ^[MAX_PLAYERS]u64) -> (front: u64) {
-	front = list[0]
-	#unroll for i in 0 ..< MAX_PLAYERS - 1 {
-		list[i] = list[i + 1]
-	}
-	return
-}
-
-place_back :: #force_inline proc(list: ^[MAX_PLAYERS]u64, p_id: u64) {
-	p_id := p_id
-	#unroll for i in 0 ..< MAX_PLAYERS - 1 {
-		if list[i] == 0 {
-			list[i] = p_id
-			p_id = 0
-		}
-	}
-	// has inserted succesfully
-	assert(p_id == 0)
-}
 
 main :: proc() {
-
 	args := os2.args
 	file: string
 
@@ -75,31 +43,13 @@ main :: proc() {
 		file = args[1]
 	}
 
-	file_data, file_err := os2.read_entire_file_from_path(file, context.allocator)
-	if file_err != nil {
-		fmt.panicf("Failed to open and read file %v: %v", file, file_err)
-	}
-
-	file_lines, split_err := str.split_lines(str.trim_space(cast(string)file_data))
-	dimentions := str.split(file_lines[0], "x")
-	_board_w = atoi(dimentions[0])
-	_board_h = atoi(dimentions[1])
-
-	tile_lines := file_lines[1:]
-
-	_board_size := _board_h * _board_w
-	assert(len(tile_lines) == _board_size)
-	_board = make_soa_slice(#soa[]Tile, _board_size) // initialize board
-	for &tile, i in _board {
-		txt_hash := hash(tile_lines[i])
-		tile.card = txt_hash
-		_hash_map[txt_hash] = tile_lines[i]
-	}
+	_board_w, _board_h, _hash_map, _board = parse_board(file)
 
 	/*
 	*	Lock hierarchy:
 	*	player > board > watch
 	*/
+
 
 	e := Effect {
 		_board,
@@ -114,7 +64,6 @@ main :: proc() {
 
 	router: http.Router
 	http.router_init(&router)
-	defer http.router_destroy(&router)
 
 
 	http.route_get(&router, "/look/(.+)", {
@@ -204,12 +153,12 @@ main :: proc() {
 
 			boardstate, err := flip(player_id, tile_pos, e)
 
-			if err != nil {
+			if err != .Ok {
 				status = .Conflict
 			}
 
 			http.headers_set(&res.headers, "Access-Control-Allow-Origin", "*")
-			http.respond_plain(res, boardstate, status = status)
+			http.respond_plain(res, boardstate, status)
 		},
 	})
 
@@ -236,4 +185,5 @@ main :: proc() {
 			fmt.eprintln("Listen and server Error:", err)
 		}
 	}
+
 }

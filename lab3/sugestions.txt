@@ -1,0 +1,6 @@
+4. Tests should cover all rules
+5. things should return status CONFLICT
+
+TODO: MAKE SURE IT FALLOWS THE REQUIREMENTS
+
+1. make sure the card name doesn't contain spaces
