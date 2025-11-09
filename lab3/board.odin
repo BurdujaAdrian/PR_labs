@@ -342,6 +342,10 @@ parse_board :: proc(
 	fmt.assertf(len(tile_lines) == board_size, "%v != %v", len(tile_lines), board_size)
 	board = make_soa_slice(#soa[]Tile, board_size) // initialize board
 	for &tile, i in board {
+		fmt.assertf(
+			str.count(tile_lines[i], " ") == 0,
+			"Any tile should not have any empty spaces as string",
+		)
 		txt_hash := hash(tile_lines[i])
 		tile.card = txt_hash
 		hash_map[txt_hash] = tile_lines[i]

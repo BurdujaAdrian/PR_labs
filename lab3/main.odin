@@ -77,6 +77,10 @@ main :: proc() {
 
 
 			player_name := req.url_params[0]
+			fmt.assertf(
+				str.count(player_name, " ") == 0,
+				"Player name should not have any empty spaces",
+			)
 			player_id := hash(player_name)
 
 			boardstate: string
