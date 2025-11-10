@@ -391,4 +391,8 @@ memory for all allocation, trivialising memory management.
 
 
 ## Conclusion
+I successfully implemented a concurrent, networked multiplayer game that taught me valuable lessons in synchronization and system design. I learned how to properly use condition variables and mutexes to eliminate busy waiting and prevent race conditions, which was a significant achievement in managing shared state between multiple players.
 
+I gained practical experience designing thread-safe data structures and handling the complexities of concurrent access patterns. Implementing the game rules while maintaining performance and correctness challenged me to think carefully about state transitions and synchronization points.
+
+Most importantly, I now understand how to build responsive systems that can efficiently manage multiple simultaneous operations without compromising data integrity or user experience. This project demonstrated that with careful design, complex synchronization problems can be solved elegantly and efficiently.
