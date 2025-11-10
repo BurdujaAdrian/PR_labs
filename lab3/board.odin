@@ -307,10 +307,12 @@ board_look :: #force_inline proc(player_id: u64, e: ^Effect, loc := #caller_loca
 				// owner is trying to take it
 				write_str(&builder, "my ")
 				write_str(&builder, e.hash_map[tile.card])
+				fmt.println(e.hash_map[tile.card])
 			} else {
 				// there is an owner, just not you
 				write_str(&builder, "up ")
 				write_str(&builder, e.hash_map[tile.card])
+				fmt.println(e.hash_map[tile.card])
 			}
 		}
 	}
@@ -326,7 +328,6 @@ parse_board :: proc(
 ) {
 
 	file_data, file_err := os2.read_entire_file_from_path(file, context.allocator)
-	defer delete(file_data)
 
 	if file_err != nil {
 		fmt.panicf("Failed to open and read file %v: %v", file, file_err)
@@ -349,6 +350,7 @@ parse_board :: proc(
 		txt_hash := hash(tile_lines[i])
 		tile.card = txt_hash
 		hash_map[txt_hash] = tile_lines[i]
+		fmt.println(tile_lines[i], txt_hash)
 	}
 	return
 }
