@@ -124,14 +124,18 @@ main :: proc() {
 
 			player_name := req.url_params[0]
 			player_id := hash(player_name)
+			state: http.Status = .OK
 
 			from, _ := net.percent_decode(req.url_params[1])
 			to, _ := net.percent_decode(req.url_params[2])
 
-			boardstate := replace(to, from, player_id, e)
+			boardstate, err := replace(to, from, player_id, e)
+			if err == .Conflict {
+				state = http.Status.Conflict
+			}
 
 			http.headers_set(&res.headers, "Access-Control-Allow-Origin", "*")
-			http.respond_plain(res, boardstate)
+			http.respond_plain(res, boardstate, status = state)
 		},
 	})
 
@@ -179,7 +183,7 @@ main :: proc() {
 			handler,
 			http.Default_Endpoint,
 			http.Server_Opts {
-				thread_count = os.processor_core_count(),
+				thread_count = 6,
 				auto_expect_continue = true,
 				redirect_head_to_get = true,
 				limit_request_line = 8000,

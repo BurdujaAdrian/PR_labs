@@ -150,16 +150,15 @@ flip_tile :: #force_inline proc(player_id: u64, tile_pos: int, e: ^Effect) -> (e
 			// if they are the same 2 cards, empty them
 			tile1 := e.board[tiles_owned[0]]
 			tile2 := e.board[tiles_owned[1]]
-			if tile1.card == tile2.card {
-				e.board[tiles_owned[0]].card = NO_STRING
-				e.board[tiles_owned[1]].card = NO_STRING
-				relinquish_tile(tiles_owned[0], e)
-				relinquish_tile(tiles_owned[1], e)
-			} else {
-				err = .Conflict
-				flip_free_facedown(tiles_flipped[0], e)
-				flip_free_facedown(tiles_flipped[1], e)
-			}
+			fmt.assertf(
+				tile1.card == tile2.card,
+				"The only time a player owns 2 cards is when they get a match",
+			)
+			e.board[tiles_owned[0]].card = NO_STRING
+			e.board[tiles_owned[1]].card = NO_STRING
+			relinquish_tile(tiles_owned[0], e)
+			relinquish_tile(tiles_owned[1], e)
+
 
 			board_was_updated(e)
 			// the previous 2 choices were handled
@@ -193,7 +192,6 @@ flip_tile :: #force_inline proc(player_id: u64, tile_pos: int, e: ^Effect) -> (e
 
 					if tile.owner == player_id {
 						when ODIN_DEBUG do fmt.println(player_id, "has taken controll over", tile)
-						tile.flipped_by = player_id
 						break wait_loop
 					}
 					if tile.card == NO_STRING {
@@ -229,13 +227,9 @@ flip_tile :: #force_inline proc(player_id: u64, tile_pos: int, e: ^Effect) -> (e
 			// #2-b
 			if tile.owner != NO_STRING {
 				// no card here
-				old_choice := players_owned[0] + players_owned[1]
+				old_choice := tiles_owned[0] + tiles_owned[1] + 1
 
-				// player pos starts from 1, 0 means empty
-				assert(old_choice != 0)
-
-				relinquish_tile(old_choice - 1, e)
-
+				relinquish_tile(old_choice, e)
 
 				board_was_updated(e)
 				return .Conflict
@@ -248,9 +242,8 @@ flip_tile :: #force_inline proc(player_id: u64, tile_pos: int, e: ^Effect) -> (e
 
 			prev_tile_pos := players_owned[0] + players_owned[1] - 1
 			prev_tile := e.board[prev_tile_pos]
-			if tile.card == prev_tile.card {
-				// nothing happens, player still owns it
-			} else {
+
+			if tile.card != prev_tile.card {
 				relinquish_tile(prev_tile_pos, e)
 				relinquish_tile(tile_pos, e)
 
@@ -265,11 +258,13 @@ flip_tile :: #force_inline proc(player_id: u64, tile_pos: int, e: ^Effect) -> (e
 	return
 }
 
-board_map :: #force_inline proc(to, from: string, e: ^Effect) {
+board_map :: #force_inline proc(to, from: string, e: ^Effect) -> Game_err {
+	if str.contains_any(to, " \r\n") do return .Conflict
 	from_hash := hash(from)
 	e.hash_map[from_hash] = str.clone(to, e.hash_map.allocator)
 	board_was_updated(e)
 	check_rep(e)
+	return .Ok
 }
 board_watch :: #force_inline proc(e: ^Effect) {
 	if guard(&e.update_lock) {
@@ -307,12 +302,10 @@ board_look :: #force_inline proc(player_id: u64, e: ^Effect, loc := #caller_loca
 				// owner is trying to take it
 				write_str(&builder, "my ")
 				write_str(&builder, e.hash_map[tile.card])
-				fmt.println(e.hash_map[tile.card])
 			} else {
 				// there is an owner, just not you
 				write_str(&builder, "up ")
 				write_str(&builder, e.hash_map[tile.card])
-				fmt.println(e.hash_map[tile.card])
 			}
 		}
 	}
@@ -350,7 +343,6 @@ parse_board :: proc(
 		txt_hash := hash(tile_lines[i])
 		tile.card = txt_hash
 		hash_map[txt_hash] = tile_lines[i]
-		fmt.println(tile_lines[i], txt_hash)
 	}
 	return
 }

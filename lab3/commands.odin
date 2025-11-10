@@ -6,9 +6,8 @@ flip :: proc(player_id: u64, tile_pos: int, e: ^Effect) -> (boardstate: string, 
 }
 
 
-replace :: proc(to, from: string, player_id: u64, e: ^Effect) -> string {
-	board_map(to, from, e)
-	return board_look(player_id, e)
+replace :: proc(to, from: string, player_id: u64, e: ^Effect) -> (string, Game_err) {
+	return board_look(player_id, e), board_map(to, from, e)
 }
 
 watch :: proc(player_id: u64, e: ^Effect) -> string {
