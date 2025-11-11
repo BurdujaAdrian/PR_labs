@@ -134,7 +134,6 @@ check_rep :: #force_inline proc(e: ^Effect) {
 
 
 flip_tile :: #force_inline proc(player_id: u64, tile_pos: int, e: ^Effect) -> (err: Game_err) {
-	defer board_was_updated(e)
 	write_guard: if guard(&e.board_lock) {
 
 		players_owned, players_flipped := find_player_pos(player_id, e)
@@ -161,6 +160,7 @@ flip_tile :: #force_inline proc(player_id: u64, tile_pos: int, e: ^Effect) -> (e
 			relinquish_tile(tiles_owned[1], e)
 
 
+			board_was_updated(e)
 			// the previous 2 choices were handled
 			// now act as if that was the first choice
 			fallthrough
@@ -172,6 +172,7 @@ flip_tile :: #force_inline proc(player_id: u64, tile_pos: int, e: ^Effect) -> (e
 			if tile.card == NO_STRING {
 				// no card here
 				// operations fails and you do nothing
+				board_was_updated(e)
 				return .Conflict
 			}
 
@@ -204,6 +205,7 @@ flip_tile :: #force_inline proc(player_id: u64, tile_pos: int, e: ^Effect) -> (e
 				tile.owner = player_id
 				tile.flipped_by = player_id
 			}
+			board_was_updated(e)
 
 		// has already 1 tile occupied
 		case players_owned[0] * players_owned[1] == 0:
@@ -218,6 +220,7 @@ flip_tile :: #force_inline proc(player_id: u64, tile_pos: int, e: ^Effect) -> (e
 				relinquish_tile(old_choice - 1, e)
 
 
+				board_was_updated(e)
 				return .Conflict
 			}
 
@@ -228,6 +231,7 @@ flip_tile :: #force_inline proc(player_id: u64, tile_pos: int, e: ^Effect) -> (e
 
 				relinquish_tile(old_choice, e)
 
+				board_was_updated(e)
 				return .Conflict
 			}
 
@@ -245,6 +249,7 @@ flip_tile :: #force_inline proc(player_id: u64, tile_pos: int, e: ^Effect) -> (e
 
 				err = .Conflict
 			}
+			board_was_updated(e)
 		}
 	} // :write_guard
 
@@ -264,7 +269,6 @@ board_map :: #force_inline proc(to, from: string, e: ^Effect) -> Game_err {
 board_watch :: #force_inline proc(e: ^Effect) {
 	if guard(&e.update_lock) {
 		for !e.was_updated do sync.cond_wait(&e.update_watch, &e.update_lock)
-		e.was_updated = false
 	}
 	check_rep(e)
 }
@@ -416,6 +420,7 @@ relinquish_tile :: proc(pos: int, e: ^Effect, loc := #caller_location) {
 
 
 board_was_updated :: #force_inline proc(e: ^Effect) {
+	e.was_updated = false
 	if guard(&e.update_lock) {
 		e.was_updated = true
 		sync.cond_broadcast(&e.update_watch)
