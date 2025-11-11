@@ -133,6 +133,9 @@ check_rep :: #force_inline proc(e: ^Effect) {
 }
 
 
+// preconditions:
+// player_id != 0
+// tile_pos >= 0
 flip_tile :: #force_inline proc(player_id: u64, tile_pos: int, e: ^Effect) -> (err: Game_err) {
 	write_guard: if guard(&e.board_lock) {
 
@@ -258,6 +261,8 @@ flip_tile :: #force_inline proc(player_id: u64, tile_pos: int, e: ^Effect) -> (e
 	return
 }
 
+// Precondition
+// to,from must not contain spaces
 board_map :: #force_inline proc(to, from: string, e: ^Effect) -> Game_err {
 	if str.contains_any(to, " \r\n") do return .Conflict
 	from_hash := hash(from)
@@ -266,6 +271,7 @@ board_map :: #force_inline proc(to, from: string, e: ^Effect) -> Game_err {
 	check_rep(e)
 	return .Ok
 }
+
 board_watch :: #force_inline proc(e: ^Effect) {
 	if guard(&e.update_lock) {
 		for !e.was_updated do sync.cond_wait(&e.update_watch, &e.update_lock)
@@ -273,6 +279,8 @@ board_watch :: #force_inline proc(e: ^Effect) {
 	check_rep(e)
 }
 
+// Precondition
+// player_id != 0
 board_look :: #force_inline proc(player_id: u64, e: ^Effect, loc := #caller_location) -> string {
 	fmt.assertf(
 		player_id != NO_STRING,
@@ -311,6 +319,8 @@ board_look :: #force_inline proc(player_id: u64, e: ^Effect, loc := #caller_loca
 	return str.to_string(builder)
 }
 
+// Precondition
+// file must be a path to an existing file
 parse_board :: proc(
 	file: string,
 ) -> (
@@ -349,6 +359,11 @@ parse_board :: proc(
 
 POS_INT_MAX: int : 1 << 63 - 1
 //@game helpers
+
+
+// Precondition
+// player_id != 0
+// size of the board must be less then the positive int max
 find_player_pos :: proc(
 	player_id: u64,
 	e: ^Effect,
@@ -409,6 +424,8 @@ find_player_pos :: proc(
 }
 
 
+// precondition:
+// pos must be positive
 relinquish_tile :: proc(pos: int, e: ^Effect, loc := #caller_location) {
 
 	fmt.assertf(pos > -1, "input pos must be positive", loc = loc)
