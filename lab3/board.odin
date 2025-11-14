@@ -23,6 +23,10 @@ Tile :: struct {
 	wait_list:  [MAX_PLAYERS]u64 `fmt:"-"`,
 }
 
+// # Precondition
+// list must be non null
+// # postcondition:
+// returns the elemet at [0] and moves the rest back by one
 pop_front :: #force_inline proc(list: ^[MAX_PLAYERS]u64) -> (front: u64) {
 	front = list[0]
 	#unroll for i in 0 ..< MAX_PLAYERS - 1 {
@@ -31,12 +35,21 @@ pop_front :: #force_inline proc(list: ^[MAX_PLAYERS]u64) -> (front: u64) {
 	return
 }
 
+// # Precondition
+// tile_id must be >= 0
+// # postcondition:
+// flips the tile facedown if it's not controlled by a player
 flip_free_facedown :: #force_inline proc(tile_id: int, e: ^Effect) {
 	// if owner is 0, it will go facedown, else it becomes flipped by whoever the owner is
 	e.board[tile_id].flipped_by = e.board[tile_id].owner
 }
 
 
+// # Precondition
+//
+// # postcondition
+// returns true if none of the cards have a .card value != 0
+// returns false on the first card with value non 0
 board_is_empty :: proc(e: ^Effect) -> bool {
 	for card in e.board.card[:len(e.board)] {
 		if card != NO_STRING do return false
@@ -49,6 +62,10 @@ place_back :: proc {
 	place_back_tile,
 }
 
+// # Precondition:
+// list must be non null
+// # postcondition
+// puts the p_id at the first non 0 position in the list
 place_back_tile :: #force_inline proc(list: ^[MAX_PLAYERS]u64, p_id: u64) {
 	p_id := p_id
 	#unroll for i in 0 ..< MAX_PLAYERS - 1 {
@@ -133,9 +150,11 @@ check_rep :: #force_inline proc(e: ^Effect) {
 }
 
 
-// preconditions:
+// # preconditions:
 // player_id != 0
 // tile_pos >= 0
+// # postcondition
+// returns .Ok if the operation succeeds, .Conflict if not
 flip_tile :: #force_inline proc(player_id: u64, tile_pos: int, e: ^Effect) -> (err: Game_err) {
 	write_guard: if guard(&e.board_lock) {
 
@@ -261,9 +280,15 @@ flip_tile :: #force_inline proc(player_id: u64, tile_pos: int, e: ^Effect) -> (e
 	return
 }
 
-// Precondition
-// to,from must not contain spaces
+// # Precondition
+// to,from must not contain spaces, and must be non empty
+// # postcondition
+// modifies the map from hashes to strings.
+// returns .Ok if "from","to" were mapped correctly
+// returns .Conflict if the inputs are invalid
 board_map :: #force_inline proc(to, from: string, e: ^Effect) -> Game_err {
+	if to == "" do return .Conflict
+	if from == "" do return .Conflict
 	if str.contains_any(to, " \r\n") do return .Conflict
 	from_hash := hash(from)
 	e.hash_map[from_hash] = str.clone(to, e.hash_map.allocator)
@@ -272,6 +297,10 @@ board_map :: #force_inline proc(to, from: string, e: ^Effect) -> Game_err {
 	return .Ok
 }
 
+
+// # Precondition
+// # postcondition
+// waits on condition variable e.update_watch
 board_watch :: #force_inline proc(e: ^Effect) {
 	if guard(&e.update_lock) {
 		for !e.was_updated do sync.cond_wait(&e.update_watch, &e.update_lock)
@@ -279,8 +308,10 @@ board_watch :: #force_inline proc(e: ^Effect) {
 	check_rep(e)
 }
 
-// Precondition
+// # Precondition
 // player_id != 0
+// # postcondition
+// returns the formatted state of the board as a string
 board_look :: #force_inline proc(player_id: u64, e: ^Effect, loc := #caller_location) -> string {
 	fmt.assertf(
 		player_id != NO_STRING,
@@ -319,8 +350,10 @@ board_look :: #force_inline proc(player_id: u64, e: ^Effect, loc := #caller_loca
 	return str.to_string(builder)
 }
 
-// Precondition
+// # Precondition
 // file must be a path to an existing file
+// # postcondition
+// returns the board's width,height, hashmap and board itself
 parse_board :: proc(
 	file: string,
 ) -> (
@@ -361,9 +394,11 @@ POS_INT_MAX: int : 1 << 63 - 1
 //@game helpers
 
 
-// Precondition
+// # Precondition
 // player_id != 0
 // size of the board must be less then the positive int max
+// # postcondition
+// returns the possible 2 indexes for the tiles player_id owns and previously flipped
 find_player_pos :: proc(
 	player_id: u64,
 	e: ^Effect,
@@ -424,8 +459,10 @@ find_player_pos :: proc(
 }
 
 
-// precondition:
+// # precondition:
 // pos must be positive
+// # postcondition:
+// the board tiles from are modified
 relinquish_tile :: proc(pos: int, e: ^Effect, loc := #caller_location) {
 
 	fmt.assertf(pos > -1, "input pos must be positive", loc = loc)
