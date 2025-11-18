@@ -1,0 +1,55 @@
+# name: lab4_
+
+services:
+  leader:
+    build: ./leader/
+    ports:
+      - "8080:8080"
+    environment:
+      - PORT=8080
+      - QUORUM=3
+      
+      - MIN_DELAY=0.1ms
+      - MAX_DELAY=10ms
+      - FALLOWERS=follower1,follower2,follower3,follower4,follower5
+    networks:
+      - kv-network
+
+  follower1:
+    build: ./fallower/
+    environment:
+      - PORT=8080
+    networks:
+      - kv-network
+
+  follower2:
+    build: ./fallower/
+    environment:
+      - PORT=8080
+    networks:
+      - kv-network
+
+  follower3:
+    build: ./fallower/
+    environment:
+      - PORT=8080
+    networks:
+      - kv-network
+
+  follower4:
+    build: ./fallower/
+    environment:
+      - PORT=8080
+    networks:
+      - kv-network
+
+  follower5:
+    build: ./fallower/
+    environment:
+      - PORT=8080
+    networks:
+      - kv-network
+
+networks:
+  kv-network:
+    driver: bridge
