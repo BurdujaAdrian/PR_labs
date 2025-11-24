@@ -1,11 +1,11 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
 	"sync"
-	// "io"
 )
 
 var (
@@ -25,7 +25,7 @@ func main() {
 
 	})
 
-	http.HandleFunc("GET /{key}", func(w http.ResponseWriter, r *http.Request) {
+	http.HandleFunc("/{key}", func(w http.ResponseWriter, r *http.Request) {
 		key := r.PathValue("key")
 
 		val, ok := kv_map.Load(key)
@@ -37,6 +37,23 @@ func main() {
 		}
 
 		fmt.Fprintf(w, "Failed to retrieve value of %v", key)
+	})
+
+	http.HandleFunc("/check", func(w http.ResponseWriter, r *http.Request) {
+
+		new_map := map[string]string{}
+		kv_map.Range(func(key, value any) bool {
+			new_map[key.(string)] = value.(string)
+			return true
+		})
+
+		data, err := json.Marshal(new_map)
+		if err != nil {
+			panic(err)
+		}
+
+		fmt.Fprintln(w, string(data))
+
 	})
 
 	fmt.Println("Server started succesfully")

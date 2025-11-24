@@ -7,10 +7,10 @@ services:
       - "8080:8080"
     environment:
       - PORT=8080
-      - QUORUM=3
+      - QUORUM=${quorum}
       
-      - MIN_DELAY=0.1ms
-      - MAX_DELAY=10ms
+      - MIN_DELAY=0
+      - MAX_DELAY=1000
       - FALLOWERS=follower1,follower2,follower3,follower4,follower5
     networks:
       - kv-network
